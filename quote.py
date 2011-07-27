@@ -4,7 +4,7 @@
 OUTPUT_MARK = "*"
 OUTPUT_ERR = "#"
 
-# TODO
+# TODO list:
 #  character encoding
 #
 #  at least document how to disable / enable individual checks using comments
@@ -18,6 +18,8 @@ OUTPUT_ERR = "#"
 #  lists (undefined behaviour)
 #  <q> tags (will simply be ignored)
 
+#TODO double quotes
+#TODO automatic up-conversion of straight quotes
 
 import sys
 infile = sys.stdin
@@ -112,7 +114,13 @@ def punctuation_pop(p):
 	if punctuation_stack[-1] != p:
 		if punctuation_stack[-1 - punctuation_maybe_pops] == p:
 			# Looks like the apostrophes we noted may have been close-quotes
+			
+			#FIXME merge?
+			#TODO: distinguish this from unambiguous error cases
+			#TODO: better if we indicate the missing character?  (Or better, the opening character)
 			outfile.write(' ' + OUTPUT_MARK * punctuation_maybe_pops)
+			
+			
 			del punctuation_stack[-1 - punctuation_maybe_pops:]
 			punctuation_maybe_pops = 0
 		else:
@@ -143,7 +151,7 @@ def __character(c):
 	# FIXME history_s[-2]
 
 	if history_s[-2] in ["'", '"']:
-		outfile.write(OUTPUT_MARK)
+		outfile.write(OUTPUT_MARK) # FIXME OUTPUT_ERR
 
 	if history_s[-2] == '(':
 		punctuation_push(')')
@@ -179,7 +187,16 @@ def __character(c):
 
 def character_data(c):
 	global history
-	assert len(c) == 1
+	assert len(c) == 1 # FIXME looks like it breaks on ']', presumably because of CDATA escaping.
+				# we should probably tolerate it
+				# easiest would be to tolerate it with a loop, document it,
+				# and expand the assertion.
+				#
+				# additionally, we could avoid the lack of accuracy by escaping ] 
+				# outside of cdata sections
+				#
+				# of course this is getting hacky, but our concept is already
+				# pretty obscene.
 	
 	if c.isspace():
 		# All ASCII whitespace characters are treated the same
@@ -225,7 +242,7 @@ parser.StartElementHandler = start_element
 parser.EndElementHandler = end_element
 parser.CharacterDataHandler = character_data
 
-# Optimisation note: one character at a time is probably quite inefficient.  We could probably feed multiple characters and use parser.CurrentByteIndex to keep echo'd ouput in sync with our extra/modified output.
+# Feed one character at a time.  Probably very inefficient.  But we want to keep echo'd ouput in sync with our extra/modified output.
 c = infile.read(1)
 while c:
 	echo_buf += c
