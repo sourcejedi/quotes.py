@@ -21,8 +21,14 @@ OUTPUT_ERR = "#"
 #TODO automatic up-conversion of straight quotes
 
 import sys
-infile = sys.stdin
+
+# NOT IMPLEMENTED: non-UTF-8 encodings
+if len(sys.argv) >= 2:
+	infile = open(sys.argv[1], 'r')
+else:
+	infile = sys.stdin
 outfile = sys.stdout
+
 #
 # Use "expat", the xml tokenizer.
 #
@@ -96,50 +102,88 @@ INVISIBLE_ELEMENTS = ['script', 'style']
 hidden_stack = []
 
 
-# Stack to keep track of the closing punctation marks we expect to see.
-punctuation_stack = []
-punctuation_maybe_pops = 0
+# Stack to keep track of the current "open" punctuation marks,
+# with a _limited_ non-deterministic pop() used to handle
+# apostrophes which might be close-quote characters
+stack = []
+print (stack)
+
+import collections
+class StackFrame(object):
+	__slots__ = ('p', 'count', 'maybe_popped')
+	
+	def __init__(self, p, count=1, maybe_popped=0):
+		self.p = p
+		self.count = count
+		self.maybe_popped = maybe_popped
+	
+	def __repr__(self):
+		return 'StackFrame' + \
+		    repr((self.p, self.count, self.maybe_popped))
 
 def punctuation_push(p):
-	punctuation_stack.append(p)
-
-def punctuation_pop(p):
-	global punctuation_maybe_pops
+	global stack
 	
-	if not punctuation_stack:
+	if stack and stack[-1].p == p:
+		stack[-1].count += 1
+	else:
+		stack.append(StackFrame(p))
+	
+def punctuation_pop(p):
+	global stack
+	
+	if not stack:
 		outfile.write(OUTPUT_ERR)
 		return
 	
-	if punctuation_stack[-1] != p:
-		if punctuation_stack[-1 - punctuation_maybe_pops] == p:
+	if p != stack[-1].p:
+		if len(stack) >= 2 and p == stack[-2].p and \
+		    stack[-1].maybe_popped == stack[-1].count:
 			# Looks like the apostrophes we noted may have been close-quotes
-			
-			#FIXME merge?
-			#TODO: distinguish this from unambiguous error cases
-			#TODO: better if we indicate the missing character?  (Or better, the opening character)
-			outfile.write(' ' + OUTPUT_MARK * punctuation_maybe_pops)
-			
-			
-			del punctuation_stack[-1 - punctuation_maybe_pops:]
-			punctuation_maybe_pops = 0
+			outfile.write(' ' + OUTPUT_MARK * stack[-1].maybe_popped)
+			stack.pop()
+			# Fall through to pop p as well
 		else:
-			outfile.write(OUTPUT_ERR)
-	else:
-		punctuation_stack.pop()
+			outfile.write(' ' + OUTPUT_ERR + '[' + stack[-1].p + ']')
+			# NOTE: no recovery here; we'll probably look a bit broken
+			# until the next paragraph break.
+			return
+	
+	stack[-1].count -= 1
+	if stack[-1].maybe_popped > stack[-1].count:
+		stack[-1].maybe_popped = stack[-1].count
+	if stack[-1].count <= 0:
+		stack.pop()
 
-# (*Limited*) non-deterministic pop
-# Used for apostrophes which might be close-quote characters
 def punctuation_maybe_pop(p):
-	global punctuation_maybe_pops
+	global stack
 	
 	outfile.write(OUTPUT_MARK) # note the potential ambiguity
 	
-	if punctuation_maybe_pops + 1 <= len(punctuation_stack):
-		if p == punctuation_stack[-(punctuation_maybe_pops + 1)]:
-			punctuation_maybe_pops += 1
+	if stack and stack[-1].p == p:
+		if stack[-1].maybe_popped < stack[-1].count:
+			stack[-1].maybe_popped += 1
+
+def punctuation_endpara():
+	global stack
+	
+	if stack and stack[-1].maybe_popped > 0:
+		# Looks like some of the apostrophes we noted might have been close-quotes
+		outfile.write(' ' + OUTPUT_MARK * stack[-1].maybe_popped)
+		stack[-1].count -= stack[-1].maybe_popped
+		if stack[-1].count <= 0:
+			stack.pop()
+	
+	if stack:
+		outfile.write(' ' + OUTPUT_ERR + '[')
+		for s in stack:
+			outfile.write(s.p)
+		outfile.write(']')
+		stack = []
+
 
 def __character(c):
-	# Checks at this point will output a mark just _before_ the character "c"
+	# Messages output at this point will appear just _before_ the character "c"
 	
 	history_s = history + c	####
 
@@ -154,14 +198,19 @@ def __character(c):
 		outfile.write(OUTPUT_MARK) # FIXME OUTPUT_ERR
 
 	if cur == '(':
-		punctuation_push(')')
+		punctuation_push('(')
 	if cur == ')':
-		punctuation_pop(')')
+		punctuation_pop('(')
 
 	if cur == '“':
-		punctuation_push('”')
+		punctuation_push('“')
 	if cur == '”':
-		punctuation_pop('”')
+		punctuation_pop('“')
+
+	# Open quote
+	if cur == "‘":
+		#TODO nospace
+		punctuation_push("‘")
 
 	if cur == "’":
 		if prev.isalpha():
@@ -170,19 +219,14 @@ def __character(c):
 				pass
 			else:
 				# Ambiguous - could be end-of-word apostrophe OR closing quote
-				punctuation_maybe_pop('1')
+				punctuation_maybe_pop("‘")
 		else:
 			if next.isalpha():
 				# Should be a start-of-word apostrophe - but there's a possibility it's a wrongly-angled opening quote, and there's usually not too many of these to check.
 				outfile.write(OUTPUT_MARK)
 			else:
 				# Not attached to word - must be a closing quote
-				punctuation_pop('1')
-	# Open quote
-	if cur == '‘':
-		#TODO nospace
-		punctuation_push('1')
-
+				punctuation_pop("‘")
 
 def character_data(c):
 	global history
@@ -212,17 +256,9 @@ def character_data(c):
 
 def __paragraph_break():
 	global history
-	global punctuation_stack
-	global punctuation_maybe_pops # FIXME
 	
 	__character('\n')
-	
-	if punctuation_stack:
-		#outfile.write(' ' + OUTPUT_MARK * len(punctuation_stack))
-		outfile.write(' ' + OUTPUT_ERR * len(punctuation_stack))
-		punctuation_stack = []
-		punctuation_maybe_pops = 0
-	
+	punctuation_endpara()
 	history = history[1:] + '\n'
 
 
