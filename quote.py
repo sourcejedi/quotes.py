@@ -18,7 +18,6 @@ OUTPUT_ERR = "#"
 #  lists (undefined behaviour)
 #  <q> tags (will simply be ignored)
 
-#TODO double quotes
 #TODO automatic up-conversion of straight quotes
 
 import sys
@@ -140,47 +139,47 @@ def punctuation_maybe_pop(p):
 			punctuation_maybe_pops += 1
 
 def __character(c):
-	# Checks at this point will output a mark _before_ the current character
+	# Checks at this point will output a mark just _before_ the character "c"
 	
-	history_s = history + c
+	history_s = history + c	####
+
 	if history_s.endswith("‘ "):
 		outfile.write(OUTPUT_MARK)
 	if history_s.endswith(" ’ "):
 		outfile.write(OUTPUT_MARK)
 
-	# FIXME history_s[-2]
-
-	if history_s[-2] in ["'", '"']:
+	(prev, cur, next) = history_s[-3:]
+	
+	if cur in ["'", '"']:
 		outfile.write(OUTPUT_MARK) # FIXME OUTPUT_ERR
 
-	if history_s[-2] == '(':
+	if cur == '(':
 		punctuation_push(')')
-	if history_s[-2] == ')':
+	if cur == ')':
 		punctuation_pop(')')
 
-	if history_s[-2] == '[':
-		punctuation_push(']')
-	if history_s[-2] == ']':
-		punctuation_pop(']')	
+	if cur == '“':
+		punctuation_push('”')
+	if cur == '”':
+		punctuation_pop('”')
 
-	if history_s[-2] == "’":
-		if not history_s[-3].isalpha():
-			if not history_s[-1].isalpha():
-				# Not attached to word - must be a closing quote
-				punctuation_pop('1')
-			else:
-				# Should be a start-of-word apostrophe - but there's a possibility it's a wrongly-angled opening quote, and there's usually not too many of these to check.
-				outfile.write(OUTPUT_MARK)
-		else:
-			if not history_s[-1].isalpha():
-				# Ambiguous - could be end-of-word apostrophe OR closing quote
-				punctuation_maybe_pop('1')
-			else:
+	if cur == "’":
+		if prev.isalpha():
+			if next.isalpha():
 				# Internal, must be apostrophe
 				pass
-		
+			else:
+				# Ambiguous - could be end-of-word apostrophe OR closing quote
+				punctuation_maybe_pop('1')
+		else:
+			if next.isalpha():
+				# Should be a start-of-word apostrophe - but there's a possibility it's a wrongly-angled opening quote, and there's usually not too many of these to check.
+				outfile.write(OUTPUT_MARK)
+			else:
+				# Not attached to word - must be a closing quote
+				punctuation_pop('1')
 	# Open quote
-	if history_s[-2] == '‘':
+	if cur == '‘':
 		#TODO nospace
 		punctuation_push('1')
 
@@ -219,7 +218,8 @@ def __paragraph_break():
 	__character('\n')
 	
 	if punctuation_stack:
-		outfile.write(' ' + OUTPUT_MARK * len(punctuation_stack))
+		#outfile.write(' ' + OUTPUT_MARK * len(punctuation_stack))
+		outfile.write(' ' + OUTPUT_ERR * len(punctuation_stack))
 		punctuation_stack = []
 		punctuation_maybe_pops = 0
 	
