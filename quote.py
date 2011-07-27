@@ -97,20 +97,39 @@ hidden_stack = []
 
 # Stack to keep track of the closing punctation marks we expect to see.
 punctuation_stack = []
+punctuation_maybe_pops = 0
 
-
+def punctuation_push(p):
+	punctuation_stack.append(p)
 
 def punctuation_pop(p):
+	global punctuation_maybe_pops
+	
 	if not punctuation_stack:
 		outfile.write(OUTPUT_ERR)
 		return
 	
 	if punctuation_stack[-1] != p:
-		outfile.write(OUTPUT_ERR)
-		return
-	
-	punctuation_stack.pop()
+		if punctuation_stack[-1 - punctuation_maybe_pops] == p:
+			# Looks like the apostrophes we noted may have been close-quotes
+			outfile.write(' ' + OUTPUT_MARK * punctuation_maybe_pops)
+			del punctuation_stack[-1 - punctuation_maybe_pops:]
+			punctuation_maybe_pops = 0
+		else:
+			outfile.write(OUTPUT_ERR)
+	else:
+		punctuation_stack.pop()
 
+# (*Limited*) non-deterministic pop
+# Used for apostrophes which might be close-quote characters
+def punctuation_maybe_pop(p):
+	global punctuation_maybe_pops
+	
+	outfile.write(OUTPUT_MARK) # note the potential ambiguity
+	
+	if punctuation_maybe_pops + 1 <= len(punctuation_stack):
+		if p == punctuation_stack[-(punctuation_maybe_pops + 1)]:
+			punctuation_maybe_pops += 1
 
 def __character(c):
 	# Checks at this point will output a mark _before_ the current character
@@ -121,16 +140,18 @@ def __character(c):
 	if history_s.endswith(" ’ "):
 		outfile.write(OUTPUT_MARK)
 
+	# FIXME history_s[-2]
+
 	if history_s[-2] in ["'", '"']:
 		outfile.write(OUTPUT_MARK)
 
 	if history_s[-2] == '(':
-		punctuation_stack.append(')')
+		punctuation_push(')')
 	if history_s[-2] == ')':
 		punctuation_pop(')')
 
 	if history_s[-2] == '[':
-		punctuation_stack.append(']')
+		punctuation_push(']')
 	if history_s[-2] == ']':
 		punctuation_pop(']')	
 
@@ -145,7 +166,7 @@ def __character(c):
 		else:
 			if not history_s[-1].isalpha():
 				# Ambiguous - could be end-of-word apostrophe OR closing quote
-				outfile.write(OUTPUT_MARK)
+				punctuation_maybe_pop('1')
 			else:
 				# Internal, must be apostrophe
 				pass
@@ -153,7 +174,7 @@ def __character(c):
 	# Open quote
 	if history_s[-2] == '‘':
 		#TODO nospace
-		punctuation_stack.append('1')
+		punctuation_push('1')
 
 
 def character_data(c):
@@ -176,12 +197,14 @@ def character_data(c):
 def __paragraph_break():
 	global history
 	global punctuation_stack
+	global punctuation_maybe_pops # FIXME
 	
 	__character('\n')
 	
 	if punctuation_stack:
 		outfile.write(' ' + OUTPUT_MARK * len(punctuation_stack))
 		punctuation_stack = []
+		punctuation_maybe_pops = 0
 	
 	history = history[1:] + '\n'
 
