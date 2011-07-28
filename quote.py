@@ -4,6 +4,24 @@
 OUTPUT_MARK = "*"
 OUTPUT_ERR = "#"
 
+mark_ambiguous_apostrophe =	1
+mark_leading_apostrophe = 	1
+
+
+class counters:
+	pass
+counters = counters()
+
+counters.openq = 0
+counters.closeq = 0
+
+counters.leading_apostrophe = 0
+counters.ambiguous_apostrophe = 0
+
+counters.unmatched_q = 0
+counters.unmatched = 0
+
+
 # TODO list:
 #  character encoding
 #
@@ -19,6 +37,8 @@ OUTPUT_ERR = "#"
 #  <q> tags (will simply be ignored)
 
 #TODO automatic up-conversion of straight quotes
+
+#TODO test and define behaviour of NBSP
 
 import sys
 
@@ -49,8 +69,13 @@ def echo_flush():
 	echo_buf = ""
 
 
-# A look-back history of three tokens
+# A look-back history of three tokens.
+# Tokens are literal characters from text nodes,
+# " " for runs of whitespace characters, and
+# "\n" for paragraph breaks.
 history = "\n\n\n"
+
+
 
 #
 # PARAGRAPH_ELEMENTS
@@ -106,7 +131,6 @@ hidden_stack = []
 # with a _limited_ non-deterministic pop() used to handle
 # apostrophes which might be close-quote characters
 stack = []
-print (stack)
 
 import collections
 class StackFrame(object):
@@ -140,13 +164,18 @@ def punctuation_pop(p):
 		if len(stack) >= 2 and p == stack[-2].p and \
 		    stack[-1].maybe_popped == stack[-1].count:
 			# Looks like the apostrophes we noted may have been close-quotes
-			outfile.write(' ' + OUTPUT_MARK * stack[-1].maybe_popped)
+			if mark_ambiguous_apostrophe:
+				outfile.write(' ' + OUTPUT_MARK * stack[-1].maybe_popped)
 			stack.pop()
 			# Fall through to pop p as well
 		else:
 			outfile.write(' ' + OUTPUT_ERR + '[' + stack[-1].p + ']')
 			# NOTE: no recovery here; we'll probably look a bit broken
 			# until the next paragraph break.
+			if p == "‘" or stack[-1].p == "‘":
+				counters.unmatched_q += 1
+			else:
+				counters.unmatched += 1
 			return
 	
 	stack[-1].count -= 1
@@ -157,8 +186,9 @@ def punctuation_pop(p):
 
 def punctuation_maybe_pop(p):
 	global stack
-	
-	outfile.write(OUTPUT_MARK) # note the potential ambiguity
+
+	if mark_ambiguous_apostrophe:
+		outfile.write(OUTPUT_MARK)
 	
 	if stack and stack[-1].p == p:
 		if stack[-1].maybe_popped < stack[-1].count:
@@ -169,7 +199,8 @@ def punctuation_endpara():
 	
 	if stack and stack[-1].maybe_popped > 0:
 		# Looks like some of the apostrophes we noted might have been close-quotes
-		outfile.write(' ' + OUTPUT_MARK * stack[-1].maybe_popped)
+		if mark_ambiguous_apostrophe:
+			outfile.write(' ' + OUTPUT_MARK * stack[-1].maybe_popped)
 		stack[-1].count -= stack[-1].maybe_popped
 		if stack[-1].count <= 0:
 			stack.pop()
@@ -178,15 +209,19 @@ def punctuation_endpara():
 		outfile.write(' ' + OUTPUT_ERR + '[')
 		for s in stack:
 			outfile.write(s.p)
+			if s.p == "‘":
+				counters.unmatched_q += 1
+			else:
+				counters.unmatched += 1
 		outfile.write(']')
 		stack = []
-
 
 def __character(c):
 	# Messages output at this point will appear just _before_ the character "c"
 	
 	history_s = history + c	####
 
+	# FIXME OUTPUT_ERR
 	if history_s.endswith("‘ "):
 		outfile.write(OUTPUT_MARK)
 	if history_s.endswith(" ’ "):
@@ -209,6 +244,7 @@ def __character(c):
 
 	# Open quote
 	if cur == "‘":
+		counters.openq += 1
 		#TODO nospace
 		punctuation_push("‘")
 
@@ -219,13 +255,18 @@ def __character(c):
 				pass
 			else:
 				# Ambiguous - could be end-of-word apostrophe OR closing quote
+				counters.ambiguous_apostrophe += 1
 				punctuation_maybe_pop("‘")
 		else:
 			if next.isalpha():
 				# Should be a start-of-word apostrophe - but there's a possibility it's a wrongly-angled opening quote, and there's usually not too many of these to check.
-				outfile.write(OUTPUT_MARK)
+				# (FIXME could use a flag of it's own though)
+				counters.leading_apostrophe += 1
+				if mark_leading_apostrophe:
+					outfile.write(OUTPUT_MARK)
 			else:
 				# Not attached to word - must be a closing quote
+				counters.closeq += 1
 				punctuation_pop("‘")
 
 def character_data(c):
@@ -288,3 +329,19 @@ while c:
 # Tell parser we've reached the end of the file
 parser.Parse('', True)
 echo_flush()
+
+# FIXME this will suck for multiple chapter files
+# we need to accept multiple files (and glob on windows, i.e. os.name != 'posix')
+# and implement some sort of in-place or batch modification
+
+report = sys.stderr
+report.write("COUNTERS")
+report.write("\nOpen-single-quote characters (‘): " + str(counters.openq))
+report.write("\nUnambiguous single-close-quotes : " + str(counters.closeq))
+report.write("\nAmbiguous close-quote /")
+report.write("\n  apostrophe at end of word (’) : " + str(counters.ambiguous_apostrophe))
+report.write("\nApostrophe at start of word     : " + str(counters.leading_apostrophe))
+report.write("\n")
+report.write("\nDefinitely unmatched single quotes: " + str(counters.unmatched_q))
+report.write("\nOther unmatched characters        : " + str(counters.unmatched))
+report.write("\n")
