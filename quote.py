@@ -21,6 +21,10 @@ counters.ambiguous_apostrophe = 0
 counters.unmatched_q = 0
 counters.unmatched = 0
 
+counters.misspaced_q = 0
+
+counters.straight_q = 0
+counters.straight_q2 = 0
 
 # TODO list:
 #  character encoding
@@ -225,6 +229,7 @@ def __character(c):
 	(prev, cur, next) = history[-3:]
 
 	if next == "'":
+		counters.straight_q += 1
 		if cur.isspace():
 			# Could be open-quote OR leading apostrophe.
 			# We assume open-quote.
@@ -235,14 +240,16 @@ def __character(c):
 		else:
 			buf = history[-1] = "’"
 	elif next == '"':
+		counters.straight_q2 += 1
 		if cur.isspace():
 			buf = history[-1] = '“'
 		else:
 			buf = history[-1] = '”'
 	
-	(prev, cur, next) = history[-3:]
+	(prev, cur, next) = history[-3:] ####
 
 	# NOTIMPL: Could do nospace here too
+	# TODO: allow disable
 	if cur == '(':
 		punctuation_push('()')
 	if cur == ')':
@@ -251,6 +258,7 @@ def __character(c):
 	if cur == '“':
 		# TODO: count, suppress (missing NBSP)
 		if prev.isalnum() or next.isspace():
+			counters.misspaced_q += 1
 			outfile.write(OUTPUT_ERR)
 		punctuation_push('“”')
 	if cur == '”':
@@ -262,6 +270,7 @@ def __character(c):
 	if cur == "‘":
 		counters.openq += 1
 		if prev.isalnum() or next.isspace():
+			counters.misspaced_q += 1
 			outfile.write(OUTPUT_ERR)
 		punctuation_push("‘’")
 
@@ -382,13 +391,27 @@ del buf
 # and implement some sort of in-place or batch modification
 
 report = sys.stderr
-report.write("COUNTERS")
-report.write("\nOpen-single-quote characters (‘): " + str(counters.openq))
-report.write("\nUnambiguous single-close-quotes : " + str(counters.closeq))
-report.write("\nAmbiguous close-quote /")
-report.write("\n  apostrophe at end of word (’) : " + str(counters.ambiguous_apostrophe))
-report.write("\nApostrophe at start of word     : " + str(counters.leading_apostrophe))
+report.write("\nSingle quotes")
+report.write("\n                 open quotes: " + str(counters.openq))
+report.write("\n    unambiguous close quotes: " + str(counters.closeq))
 report.write("\n")
-report.write("\nDefinitely unmatched single quotes: " + str(counters.unmatched_q))
-report.write("\nOther unmatched characters        : " + str(counters.unmatched))
+report.write("\nApostrophes")
+report.write("\n    apostrophe at start of word: " + str(counters.leading_apostrophe))
+report.write("\n      ambiguous close-quote /")
+report.write("\n      apostrophe at end of word: " + str(counters.ambiguous_apostrophe))
+report.write("\n")
+report.write("\nUnmatched quotes and brackets")
+report.write("\n    single quotes (conservative): " + str(counters.unmatched_q))
+report.write("\n    double quotes and brackets  : " + str(counters.unmatched))
+report.write("\n")
+report.write("\nExtra or missing spaces around quotes: " + str(counters.misspaced_q))
+report.write("\n")
+report.write("\nStraight quote characters")
+
+#TODO
+#" (not included above)"
+#" (converted)"
+
+report.write("\n    single quotes: " + str(counters.straight_q))
+report.write("\n    double quotes: " + str(counters.straight_q2))
 report.write("\n")
