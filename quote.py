@@ -40,6 +40,8 @@ counters.unmatched = 0
 
 #TODO test and define behaviour of NBSP
 
+#FIXME we're probably not handling named character references
+
 import sys
 
 # NOT IMPLEMENTED: non-UTF-8 encodings
@@ -59,21 +61,11 @@ import xml.parsers.expat
 parser = xml.parsers.expat.ParserCreate()
 
 
-# Current xml token
-echo_buf = ""
-
-# We echo each xml token, verbatim
-def echo_flush():
-	global echo_buf
-	outfile.write(echo_buf)
-	echo_buf = ""
-
-
 # A look-back history of three tokens.
 # Tokens are literal characters from text nodes,
 # " " for runs of whitespace characters, and
 # "\n" for paragraph breaks.
-history = "\n\n\n"
+history = ["\n", "\n", "\n"]
 
 
 
@@ -134,10 +126,11 @@ stack = []
 
 import collections
 class StackFrame(object):
-	__slots__ = ('p', 'count', 'maybe_popped')
+	__slots__ = ('p', 'q', 'count', 'maybe_popped')
 	
-	def __init__(self, p, count=1, maybe_popped=0):
+	def __init__(self, p, q, count=1, maybe_popped=0):
 		self.p = p
+		self.q = q
 		self.count = count
 		self.maybe_popped = maybe_popped
 	
@@ -145,23 +138,24 @@ class StackFrame(object):
 		return 'StackFrame' + \
 		    repr((self.p, self.count, self.maybe_popped))
 
-def punctuation_push(p):
+def punctuation_push(pq):
 	global stack
 	
+	(p, q) = pq
 	if stack and stack[-1].p == p:
 		stack[-1].count += 1
 	else:
-		stack.append(StackFrame(p))
+		stack.append(StackFrame(p, q))
 	
-def punctuation_pop(p):
+def punctuation_pop(q):
 	global stack
 	
 	if not stack:
-		outfile.write(OUTPUT_ERR)
+		outfile.write(' ' + OUTPUT_ERR + '[' + q + ']')
 		return
 	
-	if p != stack[-1].p:
-		if len(stack) >= 2 and p == stack[-2].p and \
+	if q != stack[-1].q:
+		if len(stack) >= 2 and q == stack[-2].q and \
 		    stack[-1].maybe_popped == stack[-1].count:
 			# Looks like the apostrophes we noted may have been close-quotes
 			if mark_ambiguous_apostrophe:
@@ -170,9 +164,12 @@ def punctuation_pop(p):
 			# Fall through to pop p as well
 		else:
 			outfile.write(' ' + OUTPUT_ERR + '[' + stack[-1].p + ']')
-			# NOTE: no recovery here; we'll probably look a bit broken
-			# until the next paragraph break.
-			if p == "‘" or stack[-1].p == "‘":
+			# No attempt at recovery here. We may
+			# generate some confusing-looking errors
+			# until we get to the next paragraph,
+			# though they're still pretty easy to
+			# understand if you know what we're doing.
+			if q == "’" or stack[-1].p == "‘":
 				counters.unmatched_q += 1
 			else:
 				counters.unmatched += 1
@@ -184,13 +181,13 @@ def punctuation_pop(p):
 	if stack[-1].count <= 0:
 		stack.pop()
 
-def punctuation_maybe_pop(p):
+def punctuation_maybe_pop(q):
 	global stack
 
 	if mark_ambiguous_apostrophe:
 		outfile.write(OUTPUT_MARK)
 	
-	if stack and stack[-1].p == p:
+	if stack and stack[-1].q == q:
 		if stack[-1].maybe_popped < stack[-1].count:
 			stack[-1].maybe_popped += 1
 
@@ -217,36 +214,56 @@ def punctuation_endpara():
 		stack = []
 
 def __character(c):
-	# Messages output at this point will appear just _before_ the character "c"
+	global buf
+	global history
+	# At this point, "echo_buf" contains the representation of
+	# the character "c", and may be modified;
+	# output messages will appear just _before_ the character "c",
+	# (so wouldn't it be better to prepend them to c?)
 	
-	history_s = history + c	####
+	history = history[1:] + [c]
+	(prev, cur, next) = history[-3:]
 
-	# FIXME OUTPUT_ERR
-	if history_s.endswith("‘ "):
-		outfile.write(OUTPUT_MARK)
-	if history_s.endswith(" ’ "):
-		outfile.write(OUTPUT_MARK)
-
-	(prev, cur, next) = history_s[-3:]
+	if next == "'":
+		if cur.isspace():
+			# Could be open-quote OR leading apostrophe.
+			# We assume open-quote.
+			# If we get it wrong, it should get flagged as a quote mismatch error
+			#  - unless there is an ambiguous trailing apostrophe - which is what
+			# the ambiguity markers are there for.
+			buf = history[-1] = "‘"
+		else:
+			buf = history[-1] = "’"
+	elif next == '"':
+		if cur.isspace():
+			buf = history[-1] = '“'
+		else:
+			buf = history[-1] = '”'
 	
-	if cur in ["'", '"']:
-		outfile.write(OUTPUT_MARK) # FIXME OUTPUT_ERR
+	(prev, cur, next) = history[-3:]
 
+	# NOTIMPL: Could do nospace here too
 	if cur == '(':
-		punctuation_push('(')
+		punctuation_push('()')
 	if cur == ')':
-		punctuation_pop('(')
+		punctuation_pop(')')
 
 	if cur == '“':
-		punctuation_push('“')
+		# TODO: count, suppress (missing NBSP)
+		if prev.isalnum() or next.isspace():
+			outfile.write(OUTPUT_ERR)
+		punctuation_push('“”')
 	if cur == '”':
-		punctuation_pop('“')
+		if prev.isspace() or next.isalnum():
+			outfile.write(OUTPUT_ERR)
+		punctuation_pop('”')
 
 	# Open quote
 	if cur == "‘":
 		counters.openq += 1
-		#TODO nospace
-		punctuation_push("‘")
+		if prev.isalnum() or next.isspace():
+			outfile.write(OUTPUT_ERR)
+		punctuation_push("‘’")
 
 	if cur == "’":
 		if prev.isalpha():
@@ -256,21 +273,29 @@ def __character(c):
 			else:
 				# Ambiguous - could be end-of-word apostrophe OR closing quote
 				counters.ambiguous_apostrophe += 1
-				punctuation_maybe_pop("‘")
+				punctuation_maybe_pop("’")
 		else:
-			if next.isalpha():
+			if next.isalnum():
 				# Should be a start-of-word apostrophe - but there's a possibility it's a wrongly-angled opening quote, and there's usually not too many of these to check.
 				# (FIXME could use a flag of it's own though)
 				counters.leading_apostrophe += 1
 				if mark_leading_apostrophe:
 					outfile.write(OUTPUT_MARK)
 			else:
+				if prev.isspace():
+					outfile.write(OUTPUT_ERR)
 				# Not attached to word - must be a closing quote
 				counters.closeq += 1
-				punctuation_pop("‘")
+				punctuation_pop("’")
+
+# Buffered XML, which will be echoed to outfile
+buf = ""
+buf_xml = ""
 
 def character_data(c):
-	global history
+	global buf
+	global buf_xml
+	
 	assert len(c) == 1 # FIXME looks like it breaks on ']', presumably because of CDATA escaping.
 				# we should probably tolerate it
 				# easiest would be to tolerate it with a loop, document it,
@@ -281,54 +306,76 @@ def character_data(c):
 				#
 				# of course this is getting hacky, but our concept is already
 				# pretty obscene.
-	
-	if c.isspace():
-		# All ASCII whitespace characters are treated the same
-		c = ' '
-	
+
 	if not hidden_stack:
-		# Collapse whitespace characters in runs and at start of paragraphs
-		if not (c == ' ' and (history[-1] == ' ' or history[-1] == '\n')):
+		if c.isspace():
+			# All whitespace characters are treated the same
+			c = ' '
+		
+		if not (c == ' ' and history[-1].isspace()):
 			__character(c)
 
-	echo_flush()
-	
-	history = history[1:] + c
+	outfile.write(buf_xml)
+	outfile.write(buf)
+	buf_xml = ""
+	buf = ""
 
 def __paragraph_break():
-	global history
-	
 	__character('\n')
 	punctuation_endpara()
-	history = history[1:] + '\n'
 
 
 def start_element(name, attrs):
+	global buf
+	global buf_xml
+	
 	if name in INVISIBLE_ELEMENTS:
 		hidden_stack.append(name)
 	if name in PARAGRAPH_ELEMENTS:
 		__paragraph_break()
+	
+	buf_xml += buf
+	buf = ""
 
 def end_element(name):
+	global buf
+	global buf_xml
+	
 	if name in INVISIBLE_ELEMENTS:
 		hidden_stack.pop()
 	if name in PARAGRAPH_ELEMENTS:
 		__paragraph_break()
+		
+	buf_xml += buf
+	buf = ""
+
+def noncharacter_data(d):
+	global buf
+	global buf_xml
+	
+	assert d == buf
+	buf_xml += buf
+	buf = ""
 
 parser.StartElementHandler = start_element
 parser.EndElementHandler = end_element
+parser.DefaultHandler = noncharacter_data
 parser.CharacterDataHandler = character_data
 
 # Feed one character at a time.  Probably very inefficient.  But we want to keep echo'd ouput in sync with our extra/modified output.
 c = infile.read(1)
 while c:
-	echo_buf += c
+	buf += c
 	parser.Parse(c)
 	c = infile.read(1)
 
 # Tell parser we've reached the end of the file
 parser.Parse('', True)
-echo_flush()
+
+outfile.write(buf_xml)
+outfile.write(buf)
+del buf_xml
+del buf
 
 # FIXME this will suck for multiple chapter files
 # we need to accept multiple files (and glob on windows, i.e. os.name != 'posix')
