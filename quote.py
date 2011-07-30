@@ -2,7 +2,6 @@
 # -*- coding: UTF-8
 
 import sys
-import xml.parsers.expat
 
 
 # Ambiguities and warnings will be marked with an asterix
@@ -287,6 +286,7 @@ class TextChecker:
 			self.punctuation_push('“”')
 		elif cur == '”':
 			if prev.isspace() or next.isalnum():
+				counters.misspaced_q += 1
 				self.output_mark(OUTPUT_ERR)
 			self.punctuation_pop('”')
 
@@ -316,36 +316,23 @@ class TextChecker:
 						self.output_mark(OUTPUT_MARK)
 				else:
 					if prev.isspace():
+						counters.misspaced_q += 1
 						self.output_mark(OUTPUT_ERR)
 					# Not attached to word - must be a closing quote
 					counters.closeq += 1
 					self.punctuation_pop("’")
 
 	def character_data(self, c):	
-		#FIXME FIXME FIXME CDATA breaks this.
-		# back to the regexs
-	
-		assert len(c) == 1 # FIXME looks like it breaks on ']', presumably because of CDATA escaping.
-					# we should probably tolerate it
-					# easiest would be to tolerate it with a loop, document it,
-					# and expand the assertion.
-					#
-					# additionally, we could avoid the lack of accuracy by escaping ] 
-					# outside of cdata sections
-					#
-					# of course this is getting hacky, but our concept is already
-					# pretty obscene.
-
 		if self.hidden_element:
+			self.token = self.xml_token
+			self.flush_tokens()
 			return
 			
 		if c.isspace():
 			# All whitespace characters are treated the same
 			c = ' '
-					
-		if c == ' ' and self.history[-1].isspace():
-			return
 
+		self.token = self.xml_token
 		self.__character(c)
 		self.flush_tokens()
 
@@ -353,45 +340,144 @@ class TextChecker:
 		self.__character('\n')
 		self.punctuation_endpara()
 
-	def start_element(self, name, attrs):
+	def start_element(self, name, *_):
 		if name in INVISIBLE_ELEMENTS:
 			self.hidden_element.append(name)
 		if name in PARAGRAPH_ELEMENTS:
 			self.__paragraph_break()
+		self.token = self.xml_token
 		self.token_end()
 
 	def end_element(self, name):
 		if name in INVISIBLE_ELEMENTS:
 			self.hidden_element.pop()
 		if name in PARAGRAPH_ELEMENTS:
-			self.__paragraph_break()		
+			self.__paragraph_break()
+		self.token = self.xml_token
 		self.token_end()
 
-	def noncharacter_data(self, d):
-		assert d == self.token
+	def empty_element(self, name):
+		if name in PARAGRAPH_ELEMENTS:
+			self.__paragraph_break()
+		self.token = self.xml_token
+		self.token_end()
+	
+	def noncharacter_data(self):
+		self.token = self.xml_token
 		self.token_end()
 
 	def run(self, infile):
-		# We don't enable namespace handling.
+		# We don't do namespace handling.
 		# We assume the document sets
 		# the default namespace to the HTML one,
 		# as required by the XHTML DTDs.
-		parser = xml.parsers.expat.ParserCreate()
 
-		parser.StartElementHandler = self.start_element
-		parser.EndElementHandler = self.end_element
-		parser.CharacterDataHandler = self.character_data
-		parser.DefaultHandler = self.noncharacter_data
+		# Gonzo XML tokenizer
+		# Currently chokes on:
+		#  inline DOCTYPE stuff (but we don't handle that anyway)
+		#  character references
+		self.xml_token = ''
 
-		# Feed one character at a time.  Probably very inefficient.  But we want to keep echo'd ouput in sync with our extra/modified output.
-		c = infile.read(1)
-		while c:
-			self.token_add_char(c)
-			parser.Parse(c)
-			c = infile.read(1)
+		def read_char(count=1):
+			c = infile.read(count)
+			if not c:
+				raise StopIteration()
+			self.xml_token += c
+			return c
 
-		# Tell parser we've reached the end of the file
-		parser.Parse('', True)
+		def read_tag(c):
+			end = False
+			if c == '/':
+				end = True
+				c = read_char()				
+			
+			name = ''
+			while c.isalnum() or c == ':':
+				name += c
+				c = read_char()
+			assert name
+			
+			while c != '>':
+				c = read_char()
+			
+			if end:
+				self.end_element(name)
+			elif self.xml_token[-2] == '/':
+				self.empty_element(name)
+			else:
+				self.start_element(name)
+
+		def read_noncharacter_data(terminator):
+			while not self.xml_token.endswith(terminator):
+				read_char()
+			self.noncharacter_data()
+
+		def read_cdata():
+			def feed(c):
+				self.xml_token = c
+				self.character_data(c)
+			
+			c = read_char()
+			while True:
+				while c != ']':
+					self.character_data(c)
+					self.xml_token = ''
+					c = read_char()
+				
+				c = read_char()
+				if c != ']':
+					feed(']')
+					feed(c)
+					continue
+				
+				c = read_char()
+				if c != '>':
+					feed(']')
+					feed(']')
+					feed(c)
+				
+				self.xml_token = ']]>'
+				self.noncharacter_data()
+				return
+
+		def finish_token(token):
+			assert token.startswith(self.xml_token)
+			read_char(len(token) - len(self.xml_token))
+			assert token == self.xml_token
+
+		c = read_char()
+		while True:
+			if c == '<':
+				c = read_char()
+				
+				if c == '!':
+					c = read_char()
+					if c == '-':
+						c = read_char()
+						assert c == '-'
+						read_noncharacter_data('-->')
+					elif c == '[':
+						finish_token('<![CDATA[')
+						self.noncharacter_data()
+						self.xml_token = ''
+						read_cdata()
+					else:
+						finish_token('<!DOCTYPE')
+						read_noncharacter_data('>')
+				elif c == '?':
+					read_noncharacter_data('?>')
+				else:
+					read_tag(c)
+			else:
+				self.character_data(c)
+			self.xml_token = ''
+			
+			try:
+				c = read_char()
+				
+			except StopIteration:
+				break
+
 		self.flush_tokens()
 
 
