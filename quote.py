@@ -490,6 +490,7 @@ class TextChecker(XhtmlTokenizer):
 # NOT IMPLEMENTED: non-UTF-8 encodings
 # FIXME: python2
 
+outfile = sys.stdout
 if not sys.argv[1:]:
 	infile = sys.stdin
 	TextChecker(outfile).run(infile)
