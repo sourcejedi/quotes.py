@@ -100,40 +100,159 @@ PARAGRAPH_ELEMENTS = [
 INVISIBLE_ELEMENTS = ['script', 'style']
 
 
-class TextChecker:
-	# Output buffer
+class XhtmlTokenizer:
+	__slots__ = (
+		# The XML token which is currently being read
+		# from the input file.  It's safe for the
+		# callbacks to clobber this, if they want.
+		'xml_token',
+	)
+	
+	"""Gonzo Xhtml tokenizer.
+	
+	Currently ignores character references
+	(and we're going to hardcode the list of HTML named characters)
+	"""
+	
+	def start_element(self, name):
+		pass
+	def end_element(self, name):
+		pass
+	def character_data(self, c):
+		assert len(c) == 1
+	def noncharacter_data(self):
+		pass
+	def end_file(self):
+		pass
+	
+	def run(self, infile):
+		self.xml_token = ''
+
+		def read_char(count=1):
+			c = infile.read(count)
+			if not c:
+				raise StopIteration()
+			self.xml_token += c
+			return c
+
+		def read_tag(first_c):
+			c = first_c
+			
+			end_tag = False
+			if c == '/':
+				end_tag = True
+				c = read_char()				
+			
+			name = ''
+			while c.isalnum() or c == ':':
+				name += c
+				c = read_char()
+			assert name
+			
+			while c != '>':
+				c = read_char()
+			
+			if end_tag:
+				self.end_element(name)
+			elif self.xml_token[-2] == '/':
+				self.empty_element(name)
+			else:
+				self.start_element(name)
+
+		def read_noncharacter_data(end):
+			while not self.xml_token.endswith(end):
+				read_char()
+			self.noncharacter_data()
+
+		def read_cdata():
+			def feed(c):
+				self.xml_token = c
+				self.character_data(c)
+			
+			c = read_char()
+			while True:
+				while c != ']':
+					self.character_data(c)
+					self.xml_token = ''
+					c = read_char()
+				
+				c = read_char()
+				if c != ']':
+					feed(']')
+					feed(c)
+					continue
+				
+				c = read_char()
+				if c != '>':
+					feed(']')
+					feed(']')
+					feed(c)
+				
+				self.xml_token = ']]>'
+				self.noncharacter_data()
+				return
+
+		def start_token(token):
+			assert token.startswith(self.xml_token)
+			read_char(len(token) - len(self.xml_token))
+			assert token == self.xml_token
+
+		c = read_char()
+		while c:
+			if c == '<':
+				c = read_char()
+				
+				if c == '!':
+					c = read_char()
+					if c == '-':
+						c = read_char()
+						assert c == '-'
+						read_noncharacter_data('-->')
+					elif c == '[':
+						start_token('<![CDATA[')
+						self.noncharacter_data()
+						self.xml_token = ''
+						
+						read_cdata()
+					else:
+						start_token('<!DOCTYPE')
+						read_noncharacter_data('>')
+				elif c == '?':
+					read_noncharacter_data('?>')
+				else:
+					read_tag(c)
+			else:
+				self.character_data(c)
+			
+			c = self.xml_token = infile.read(1)
+
+
+class TextChecker(XhtmlTokenizer):
+	__slots__ = ()
+	
+	__slots__ += ('outfile', 'buf')
 	def outfile_init(self, outfile):
 		self.outfile = outfile
 		
-		# The single XML token which is currently being read
-		# from the input file.  May be modified in-place.
-		self.token = ""
-		
-		# Writeout buffer.  Any number of non-text XML tokens.
+		# Output buffer.  Any number of non-text XML tokens.
 		# Before this is written to the output file, we may
 		# insert some sort of marker.
-		self.buf = ""
+		self.buf = []
 	
-	def token_add_char(self, c):
-		self.token += c
-	
-	def token_rewrite(self, token):
-		self.token = token
-	
-	def token_end(self):
-		self.buf += self.token
-		self.token = ""
+	def save_token(self):
+		self.buf.append(self.xml_token)
+
+	def flush_tokens(self):
+		o = self.outfile
+		for token in self.buf:
+			o.write(token)
+		o.write(self.xml_token)
+		del self.buf[:]
 
 	def output_mark(self, mark):
 		# Write a marker to the file,
 		# before any buffered output
 		self.outfile.write(mark)
-
-	def flush_tokens(self):
-		self.outfile.write(self.buf)
-		self.outfile.write(self.token)
-		self.buf = self.token = ""
-
 
 	# Stack to keep track of the current "open" punctuation marks,
 	# with a _limited_ non-deterministic pop() used to handle
@@ -151,6 +270,7 @@ class TextChecker:
 			return 'StackFrame' + \
 			repr((self.p, self.count, self.maybe_popped))
 
+	__slots__ += ('stack',)
 	def punctuation_init(self):
 		self.stack = []
 
@@ -221,7 +341,7 @@ class TextChecker:
 			self.output_mark(']')
 			self.stack = []
 	
-	
+	__slots__ += ('history', 'hidden_element')
 	def __init__(self, outfile):
 		self.outfile_init(outfile)
 		self.punctuation_init()
@@ -257,7 +377,7 @@ class TextChecker:
 				next = "‘"
 			else:
 				next = "’"
-			self.token_rewrite(next)
+			self.xml_token = next
 			
 		elif next == '"':
 			counters.straight_q2 += 1
@@ -265,7 +385,7 @@ class TextChecker:
 				next = '“'
 			else:
 				next = '”'
-			self.token_rewrite(next)
+			self.xml_token = next
 		
 		# Done rewriting; update history
 		del self.history[0]
@@ -323,17 +443,11 @@ class TextChecker:
 					self.punctuation_pop("’")
 
 	def character_data(self, c):	
-		if self.hidden_element:
-			self.token = self.xml_token
-			self.flush_tokens()
-			return
-			
-		if c.isspace():
+		if not self.hidden_element:
 			# All whitespace characters are treated the same
-			c = ' '
-
-		self.token = self.xml_token
-		self.__character(c)
+			if c.isspace():
+				c = ' '
+			self.__character(c)
 		self.flush_tokens()
 
 	def __paragraph_break(self):
@@ -345,143 +459,30 @@ class TextChecker:
 			self.hidden_element.append(name)
 		if name in PARAGRAPH_ELEMENTS:
 			self.__paragraph_break()
-		self.token = self.xml_token
-		self.token_end()
+		self.save_token()
 
 	def end_element(self, name):
 		if name in INVISIBLE_ELEMENTS:
 			self.hidden_element.pop()
 		if name in PARAGRAPH_ELEMENTS:
 			self.__paragraph_break()
-		self.token = self.xml_token
-		self.token_end()
+		self.save_token()
 
 	def empty_element(self, name):
 		if name in PARAGRAPH_ELEMENTS:
 			self.__paragraph_break()
-		self.token = self.xml_token
-		self.token_end()
+		self.save_token()
 	
 	def noncharacter_data(self):
-		self.token = self.xml_token
-		self.token_end()
+		self.save_token()
 
-	def run(self, infile):
-		# We don't do namespace handling.
-		# We assume the document sets
-		# the default namespace to the HTML one,
-		# as required by the XHTML DTDs.
-
-		# Gonzo XML tokenizer
-		# Currently chokes on:
-		#  inline DOCTYPE stuff (but we don't handle that anyway)
-		#  character references
-		self.xml_token = ''
-
-		def read_char(count=1):
-			c = infile.read(count)
-			if not c:
-				raise StopIteration()
-			self.xml_token += c
-			return c
-
-		def read_tag(c):
-			end = False
-			if c == '/':
-				end = True
-				c = read_char()				
-			
-			name = ''
-			while c.isalnum() or c == ':':
-				name += c
-				c = read_char()
-			assert name
-			
-			while c != '>':
-				c = read_char()
-			
-			if end:
-				self.end_element(name)
-			elif self.xml_token[-2] == '/':
-				self.empty_element(name)
-			else:
-				self.start_element(name)
-
-		def read_noncharacter_data(terminator):
-			while not self.xml_token.endswith(terminator):
-				read_char()
-			self.noncharacter_data()
-
-		def read_cdata():
-			def feed(c):
-				self.xml_token = c
-				self.character_data(c)
-			
-			c = read_char()
-			while True:
-				while c != ']':
-					self.character_data(c)
-					self.xml_token = ''
-					c = read_char()
-				
-				c = read_char()
-				if c != ']':
-					feed(']')
-					feed(c)
-					continue
-				
-				c = read_char()
-				if c != '>':
-					feed(']')
-					feed(']')
-					feed(c)
-				
-				self.xml_token = ']]>'
-				self.noncharacter_data()
-				return
-
-		def finish_token(token):
-			assert token.startswith(self.xml_token)
-			read_char(len(token) - len(self.xml_token))
-			assert token == self.xml_token
-
-		c = read_char()
-		while True:
-			if c == '<':
-				c = read_char()
-				
-				if c == '!':
-					c = read_char()
-					if c == '-':
-						c = read_char()
-						assert c == '-'
-						read_noncharacter_data('-->')
-					elif c == '[':
-						finish_token('<![CDATA[')
-						self.noncharacter_data()
-						self.xml_token = ''
-						read_cdata()
-					else:
-						finish_token('<!DOCTYPE')
-						read_noncharacter_data('>')
-				elif c == '?':
-					read_noncharacter_data('?>')
-				else:
-					read_tag(c)
-			else:
-				self.character_data(c)
-			self.xml_token = ''
-			
-			try:
-				c = read_char()
-				
-			except StopIteration:
-				break
-
+	def end_file(self):
 		self.flush_tokens()
 
 
 # NOT IMPLEMENTED: non-UTF-8 encodings
+# FIXME: python2
+
 if len(sys.argv) >= 2:
 	infile = open(sys.argv[1], 'r')
 else:
