@@ -2,6 +2,8 @@
 # -*- coding: UTF-8
 
 import sys
+import os
+import glob
 import html.entities # htmlentitydefs
 
 # Ambiguities and warnings will be marked with an asterix
@@ -497,20 +499,31 @@ class TextChecker(XhtmlTokenizer):
 # NOT IMPLEMENTED: non-UTF-8 encodings
 # FIXME: python2
 
-if len(sys.argv) >= 2:
-	infile = open(sys.argv[1], 'r')
-else:
+if not sys.argv[1:]:
 	infile = sys.stdin
-outfile = sys.stdout
+	TextChecker(outfile).run(infile)
 
+# TODO: make variables into options, write usage
+modify = False
+if sys.argv[1] == '-m' or sys.argv[1] == '--modify':
+	modify = True
+	del sys.argv[1]
 
-t = TextChecker(outfile)
-t.run(infile)
+if os.name != 'posix':
+	filenames = []
+	for filename in sys.argv[1:]:
+		filenames += glob.glob(filename)
+	sys.argv[1:] = filenames
 
-
-# FIXME this will suck for multiple chapter files
-# we need to accept multiple files (and glob on windows, i.e. os.name != 'posix')
-# and implement some sort of in-place or batch modification
+for filename in sys.argv[1:]:
+	infile = open(filename, 'r')
+	if modify:
+		outfile = open(filename+".tmp", 'w')
+	
+	TextChecker(outfile).run(infile)
+	
+	if modify:
+		os.rename(filename+".tmp", filename)
 
 report = sys.stderr
 report.write("\nSingle quotes")
