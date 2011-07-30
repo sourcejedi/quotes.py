@@ -494,28 +494,28 @@ outfile = sys.stdout
 if not sys.argv[1:]:
 	infile = sys.stdin
 	TextChecker(outfile).run(infile)
+else:
+	# TODO: make variables into options, write usage
+	modify = False
+	if sys.argv[1] == '-m' or sys.argv[1] == '--modify':
+		modify = True
+		del sys.argv[1]
 
-# TODO: make variables into options, write usage
-modify = False
-if sys.argv[1] == '-m' or sys.argv[1] == '--modify':
-	modify = True
-	del sys.argv[1]
+	if os.name != 'posix':
+		filenames = []
+		for filename in sys.argv[1:]:
+			filenames += glob.glob(filename)
+		sys.argv[1:] = filenames
 
-if os.name != 'posix':
-	filenames = []
 	for filename in sys.argv[1:]:
-		filenames += glob.glob(filename)
-	sys.argv[1:] = filenames
-
-for filename in sys.argv[1:]:
-	infile = open(filename, 'r')
-	if modify:
-		outfile = open(filename+".tmp", 'w')
-	
-	TextChecker(outfile).run(infile)
-	
-	if modify:
-		os.rename(filename+".tmp", filename)
+		infile = open(filename, 'r')
+		if modify:
+			outfile = open(filename+".tmp", 'w')
+		
+		TextChecker(outfile).run(infile)
+		
+		if modify:
+			os.rename(filename+".tmp", filename)
 
 report = sys.stderr
 report.write("\nSingle quotes")
