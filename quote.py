@@ -2,7 +2,7 @@
 # -*- coding: UTF-8
 
 import sys
-
+import html.entities # htmlentitydefs
 
 # Ambiguities and warnings will be marked with an asterix
 OUTPUT_MARK = "*"
@@ -221,6 +221,20 @@ class XhtmlTokenizer:
 					read_noncharacter_data('?>')
 				else:
 					read_tag(c)
+			elif c == '&':
+				while c != ';':
+					c = read_char()
+				
+				if self.xml_token[1] == '#':	
+					if self.xml_token[2].lower() == 'x':
+						c = int(self.xml_token[3:-1], 0x10)
+					else:
+						c = int(self.xml_token[2:-1])
+					self.character_data(chr(c))
+				else:
+					name = self.xml_token[1:-1]
+					c = html.entities.entitydefs[name]
+					self.character_data(c)
 			else:
 				self.character_data(c)
 			
