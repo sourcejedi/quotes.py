@@ -17,22 +17,13 @@ mark_leading_apostrophe = 	1
 # TODO list:
 #  character encoding
 #
-#  at least document how to disable / enable individual checks using comments
-#
-#  error counters + summary
-#  (and ideally, separate listing of all errors, grouped by category)
-#
-#  test cases
+#  test cases / examples
 
 # NOT IMPLEMENTED:
 #  lists (undefined behaviour)
 #  <q> tags (will simply be ignored)
 
-#TODO automatic up-conversion of straight quotes
-
 #TODO test and define behaviour of NBSP
-
-#FIXME we're probably not handling named character references
 
 
 class Counters:
