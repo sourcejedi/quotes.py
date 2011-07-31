@@ -6,13 +6,17 @@ import os
 import glob
 import html.entities # htmlentitydefs
 
+# TODO disable line ending conversion
+
 # Ambiguities and warnings will be marked with an asterix
 OUTPUT_MARK = "*"
-OUTPUT_ERR = "#"
+OUTPUT_WARN = "#"
 
 mark_ambiguous_apostrophe =	1
 mark_leading_apostrophe = 	1
 
+warn_samequotes =		1
+max_depth = 2
 
 # TODO list:
 #  character encoding
@@ -37,10 +41,15 @@ class Counters:
 		count.unmatched_q = 0
 		count.unmatched = 0
 
-		count.misspaced_q = 0
+		count.samequotes = 0
+		count.too_deep = 0
+
+		count.spaced_q = 0
+		count.unspaced_q = 0
 
 		count.straight_q = 0
 		count.straight_q2 = 0
+
 counters = Counters()
 
 
@@ -287,22 +296,61 @@ class TextChecker(XhtmlTokenizer):
 			self.stack[-1].count += 1
 		else:
 			self.stack.append(TextChecker.StackFrame(p, q))
-	
+
+	def __punctuation_check_depth(self):
+		samecount = self.stack[-1].count
+		if samecount > 1:
+			if warn_samequotes:
+				self.output_mark(' ' + OUTPUT_WARN +
+				                 '[' + 
+				                 self.stack[-1].p * samecount + 
+				                 ']')
+			counters.samequotes += 1
+
+			# Return immediately, skipping max_depth check.
+			#
+			# 1) For apostrophe samequotes, we
+			#    generate false positives for
+			#    maxdepth (although this could
+			#    be fixed without too much fuss,
+			#    if anyone needs it).
+			
+			#  2) For quotes which point in the wrong
+			#     direction, we can get multiple mismatch
+			#     and samequotes errors.  They're just
+			#     about readable, but if we show max_depth
+			#     violations as well, there's too much
+			#     variation and it gets much harder to see
+			#     the pattern.
+			#     
+			return
+		
+		d = sum([s.count for s in self.stack])
+		if d > max_depth:
+			counters.too_deep += 1
+			self.output_mark(' ' + OUTPUT_WARN + str(d))
+
 	def punctuation_pop(self, q):
 		if not self.stack:
-			self.output_mark(' ' + OUTPUT_ERR + '[' + q + ']')
+			if q == "’":
+				counters.unmatched_q += 1
+			else:
+				counters.unmatched += 1
+			self.output_mark(' ' + OUTPUT_WARN + '[' + q + ']')
 			return
 		
 		if q != self.stack[-1].q:
 			if len(self.stack) >= 2 and q == self.stack[-2].q and \
-			self.stack[-1].maybe_popped == self.stack[-1].count:
+			   self.stack[-1].maybe_popped == self.stack[-1].count:
 				# Looks like the apostrophes we noted may have been close-quotes
 				if mark_ambiguous_apostrophe:
 					self.output_mark(' ' + OUTPUT_MARK * self.stack[-1].maybe_popped)
 				self.stack.pop()
 				# Fall through to pop p as well
 			else:
-				self.output_mark(' ' + OUTPUT_ERR + '[' + self.stack[-1].p + ']')
+				self.__punctuation_check_depth()
+				
+				self.output_mark(' ' + OUTPUT_WARN + '[' + self.stack[-1].p + ']')
 				# No attempt at recovery here. We may
 				# generate some confusing-looking errors
 				# until we get to the next paragraph,
@@ -313,6 +361,8 @@ class TextChecker(XhtmlTokenizer):
 				else:
 					counters.unmatched += 1
 				return
+		
+		self.__punctuation_check_depth()
 		
 		self.stack[-1].count -= 1
 		if self.stack[-1].maybe_popped > self.stack[-1].count:
@@ -336,11 +386,15 @@ class TextChecker(XhtmlTokenizer):
 			self.stack[-1].count -= self.stack[-1].maybe_popped
 			if self.stack[-1].count <= 0:
 				self.stack.pop()
-		
+
 		if self.stack:
-			self.output_mark(' ' + OUTPUT_ERR + '[')
+			self.__punctuation_check_depth()
+			
+			self.output_mark(' ' + OUTPUT_WARN + '[')
 			for frame in self.stack:
 				self.output_mark(frame.p)
+				
+				# This may cause some errors to be counted twice
 				if frame.p == "‘":
 					counters.unmatched_q += 1
 				else:
@@ -406,15 +460,21 @@ class TextChecker(XhtmlTokenizer):
 			self.punctuation_pop(')')
 
 		elif cur == '“':
-			# TODO: count, suppress (missing NBSP)
-			if prev.isalnum() or next.isspace():
-				counters.misspaced_q += 1
-				self.output_mark(OUTPUT_ERR)
+			# TODO: suppress (missing NBSP)
+			if prev.isalnum():
+				counters.unspaced_q += 1
+				self.output_mark(OUTPUT_WARN)
+			if next.isspace():
+				counters.spaced_q += 1
+				self.output_mark(OUTPUT_WARN)
 			self.punctuation_push('“”')
 		elif cur == '”':
-			if prev.isspace() or next.isalnum():
-				counters.misspaced_q += 1
-				self.output_mark(OUTPUT_ERR)
+			if prev.isspace():
+				counters.spaced_q += 1
+				self.output_mark(OUTPUT_WARN)
+			if next.isalnum():
+				counters.unspaced_q += 1
+				self.output_mark(OUTPUT_WARN)
 			self.punctuation_pop('”')
 
 		# Open quote
@@ -422,7 +482,7 @@ class TextChecker(XhtmlTokenizer):
 			counters.openq += 1
 			if prev.isalnum() or next.isspace():
 				counters.misspaced_q += 1
-				self.output_mark(OUTPUT_ERR)
+				self.output_mark(OUTPUT_WARN)
 			self.punctuation_push("‘’")
 
 		elif cur == "’":
@@ -443,8 +503,8 @@ class TextChecker(XhtmlTokenizer):
 						self.output_mark(OUTPUT_MARK)
 				else:
 					if prev.isspace():
-						counters.misspaced_q += 1
-						self.output_mark(OUTPUT_ERR)
+						counters.spaced_q += 1
+						self.output_mark(OUTPUT_WARN)
 					# Not attached to word - must be a closing quote
 					counters.closeq += 1
 					self.punctuation_pop("’")
@@ -496,6 +556,9 @@ if not sys.argv[1:]:
 	TextChecker(outfile).run(infile)
 else:
 	# TODO: make variables into options, write usage
+	
+	# maybe want --noout as well
+	
 	modify = False
 	if sys.argv[1] == '-m' or sys.argv[1] == '--modify':
 		modify = True
@@ -519,26 +582,28 @@ else:
 
 report = sys.stderr
 report.write("\nSingle quotes")
-report.write("\n                 open quotes: " + str(counters.openq))
-report.write("\n    unambiguous close quotes: " + str(counters.closeq))
+report.write("\n                   open quotes: " + str(counters.openq))
+report.write("\n      unambiguous close quotes: " + str(counters.closeq))
 report.write("\n")
 report.write("\nApostrophes")
 report.write("\n    apostrophe at start of word: " + str(counters.leading_apostrophe))
 report.write("\n      ambiguous close-quote /")
 report.write("\n      apostrophe at end of word: " + str(counters.ambiguous_apostrophe))
 report.write("\n")
-report.write("\nUnmatched quotes and brackets")
-report.write("\n    single quotes (conservative): " + str(counters.unmatched_q))
-report.write("\n    double quotes and brackets  : " + str(counters.unmatched))
+report.write("\nQuote spacing")
+report.write("\n              unexpected spaces: " + str(counters.spaced_q))
+report.write("\n                 missing spaces: " + str(counters.unspaced_q))
 report.write("\n")
-report.write("\nExtra or missing spaces around quotes: " + str(counters.misspaced_q))
+report.write("\nUnmatched quotes and brackets")
+report.write("\n   single quotes (conservative): " + str(counters.unmatched_q))
+report.write("\n   double quotes and brackets  : " + str(counters.unmatched))
+report.write("\n")
+report.write("\nNested quotations")
+report.write("\n      with same style of quotes: " + str(counters.samequotes))
+report.write("\n          nested " + str(max_depth + 1) +
+                                 " deep or more: " + str(counters.too_deep))
 report.write("\n")
 report.write("\nStraight quote characters")
-
-#TODO
-#" (not included above)"
-#" (converted)"
-
-report.write("\n    single quotes: " + str(counters.straight_q))
-report.write("\n    double quotes: " + str(counters.straight_q2))
+report.write("\n         straight single quotes: " + str(counters.straight_q))
+report.write("\n         straught double quotes: " + str(counters.straight_q2))
 report.write("\n")
