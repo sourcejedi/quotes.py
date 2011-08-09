@@ -27,8 +27,6 @@ max_depth = 2
 #  lists (undefined behaviour)
 #  <q> tags (will simply be ignored)
 
-#TODO test and define behaviour of NBSP
-
 
 class Counters:
 	def __init__(count):
@@ -243,6 +241,12 @@ class XhtmlTokenizer:
 			c = self.xml_token = infile.read(1)
 
 
+def isbreakspace(c):
+	# NBSP and narrow NBSP
+	nobreaks = '\u00A0\u202F'
+	return c.isspace() and c not in nobreaks
+
+
 class TextChecker(XhtmlTokenizer):
 	__slots__ = ()
 	
@@ -429,7 +433,7 @@ class TextChecker(XhtmlTokenizer):
 		# Convert straight quotes (TODO: option)
 		if next == "'":
 			counters.straight_q += 1
-			if cur.isspace():
+			if isbreakspace(cur):
 				# Could be open-quote OR leading apostrophe.
 				# We assume open-quote.
 				# If we get it wrong, it should get flagged as a quote mismatch error
@@ -442,12 +446,12 @@ class TextChecker(XhtmlTokenizer):
 			
 		elif next == '"':
 			counters.straight_q2 += 1
-			if cur.isspace():
+			if isbreakspace(cur):
 				next = '“'
 			else:
 				next = '”'
 			self.xml_token = next
-		
+
 		# Done rewriting; update history
 		del self.history[0]
 		self.history.append(next)
@@ -464,12 +468,12 @@ class TextChecker(XhtmlTokenizer):
 			if prev.isalnum():
 				counters.unspaced_q += 1
 				self.output_mark(OUTPUT_WARN)
-			if next.isspace():
+			if isbreakspace(next):
 				counters.spaced_q += 1
 				self.output_mark(OUTPUT_WARN)
 			self.punctuation_push('“”')
 		elif cur == '”':
-			if prev.isspace():
+			if isbreakspace(prev):
 				counters.spaced_q += 1
 				self.output_mark(OUTPUT_WARN)
 			if next.isalnum():
@@ -480,7 +484,7 @@ class TextChecker(XhtmlTokenizer):
 		# Open quote
 		elif cur == "‘":
 			counters.openq += 1
-			if prev.isalnum() or next.isspace():
+			if prev.isalnum() or isbreakspace(next):
 				counters.misspaced_q += 1
 				self.output_mark(OUTPUT_WARN)
 			self.punctuation_push("‘’")
@@ -502,7 +506,7 @@ class TextChecker(XhtmlTokenizer):
 					if mark_leading_apostrophe:
 						self.output_mark(OUTPUT_MARK)
 				else:
-					if prev.isspace():
+					if isbreakspace(prev):
 						counters.spaced_q += 1
 						self.output_mark(OUTPUT_WARN)
 					# Not attached to word - must be a closing quote
@@ -512,7 +516,8 @@ class TextChecker(XhtmlTokenizer):
 	def character_data(self, c):	
 		if not self.hidden_element:
 			# All whitespace characters are treated the same
-			if c.isspace():
+			# (apart from NBSP)
+			if isbreakspace(c):
 				c = ' '
 			self.__character(c)
 		self.flush_tokens()
