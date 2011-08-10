@@ -4,19 +4,108 @@
 import sys
 import os
 import glob
+import optparse
 import html.entities # htmlentitydefs
 
 # TODO disable line ending conversion
 
-# Ambiguities and warnings will be marked with an asterix
-OUTPUT_MARK = "*"
-OUTPUT_WARN = "#"
+opt = optparse.OptionParser(usage="%prog [operations] [options] [FILES]")
 
-mark_ambiguous_apostrophe =	1
-mark_leading_apostrophe = 	1
+opt.add_option('-m', '--modify',
+	action="store_true", dest="modify",
+	help="modify original file(s)")
 
-warn_samequotes =		1
-max_depth = 2
+
+opt_do = optparse.OptionGroup(opt, 'Operations')
+opt_do.add_option('-n', '--none',
+	action="store_true", dest="no_output",
+	help="show statistics only")
+
+opt_do.add_option('-a', '--all',
+	action="store_true", dest="do_all")
+
+opt_do.add_option('--apostrophe',
+	action="store_true", dest="do_apostrophe",
+	help="mark ambiguous quote/apostrophe at end of words")
+
+opt_do.add_option('--mismatch',
+	action="store_true", dest="do_mismatch",
+	help="check for mismatched quotes and curly brackets")
+
+opt_do.add_option('--spacing',
+	action="store_true", dest="do_spacing",
+	help="check for quote marks with odd spacing")
+
+opt_do.add_option('--nesting',
+	action="store_true", dest="do_nesting",
+	help="check nested quotations")
+opt.add_option_group(opt_do)
+
+
+opt_conf = optparse.OptionGroup(opt, 'General options')
+opt_conf.add_option('--ignore-straight-quotes',
+	action="store_true", dest="ignore_straight_quotes",
+	help="don't try to convert 'straight' quotation marks "
+		"(this implies they will not be checked at all)")
+
+opt_conf.add_option('--warning-mark',
+	dest="WARN", default='#', metavar="MARK",
+	help='warning marker used by most operations, default is "%default"')
+opt.add_option_group(opt_conf)
+
+
+opt_conf = optparse.OptionGroup(opt, 'Options for --apostrophe')
+opt_conf.add_option('--skip-leading-apostrophes',
+	action="store_true", dest="skip_leading_apostrophe",
+	help="don't mark apostrophes at the start of words")
+
+opt_conf.add_option('--mark', dest="MARK", default='*',
+	help='marker for ambiguous apostrophes, default is "%default"')
+opt.add_option_group(opt_conf)
+
+
+opt_conf = optparse.OptionGroup(opt, 'Options for --nesting')
+opt_conf.add_option('--allow-same-quotes',
+	action="store_true", dest="allow_same_quotes",
+	help="allow nested quotations which use "
+		"the same style of quotation marks")
+
+opt_conf.add_option('--max-depth',
+	type="int", dest="max_depth", metavar="N", default=2,
+	help="maximum depth of nested quotations/brackets, "
+		"default value is %default")
+opt.add_option_group(opt_conf)
+
+
+# Now parse arguments
+(options, args) = opt.parse_args()
+
+ops = [option for option in options.__dict__ if option.startswith('do_')]
+
+do_ops = [op for op in ops if getattr(options, op)]
+if do_ops:
+	if options.no_output:
+		print("-n / --none doesn't make sense with any other operation")
+		sys.exit(1)
+else:
+	if options.modify:
+		# --modify defaults to --all
+		options.do_all = True
+	else:
+		# otherwise default to --none
+		options.do_none = True
+
+if options.do_all:
+	# --all enables every operation
+	for op in ops:
+		setattr(options, op, True)
+
+
+# Ambiguities and warnings are marked
+# with these characters in our output.
+OUTPUT_MARK = options.MARK # "*"
+OUTPUT_WARN = options.WARN # "#"
+
 
 # TODO list:
 #  character encoding
@@ -24,8 +113,10 @@ max_depth = 2
 #  test cases / examples
 
 # NOT IMPLEMENTED:
-#  lists (undefined behaviour)
-#  <q> tags (will simply be ignored)
+#  <q> tags will simply be ignored
+#  <pre> will be treated as one big paragraph
+#  <br> - even multiple successive line breaks 
+#         will not be treated as a paragraph break
 
 
 class Counters:
@@ -61,9 +152,7 @@ counters = Counters()
 # that is not declared as "phrasing content"
 # (which would default to display:inline).
 #
-# Table cells are also included.
-#
-# NOT IMPLEMENTED: The behaviour of list items is not defined.
+# Table cells and list items are also included.
 #
 PARAGRAPH_ELEMENTS = [
 	'p',
@@ -72,8 +161,8 @@ PARAGRAPH_ELEMENTS = [
 	'blockquote',
 	'hr',
 
-	# Table cells (and table heading cells)
-	'td', 'th',
+	# Table cells, table heading cells, list items
+	'td', 'th', 'li'
 
 	'html',
 	'title',
@@ -101,18 +190,18 @@ INVISIBLE_ELEMENTS = ['script', 'style']
 
 
 class XhtmlTokenizer:
+	"""Gonzo xhtml tokenizer.
+	
+	Callbacks based on expat, except no attribute info,
+	and text is delivered one character at a time.
+	"""
+	
 	__slots__ = (
 		# The XML token which is currently being read
 		# from the input file.  It's safe for the
 		# callbacks to clobber this, if they want.
 		'xml_token',
 	)
-	
-	"""Gonzo Xhtml tokenizer.
-	
-	Currently ignores character references
-	(and we're going to hardcode the list of HTML named characters)
-	"""
 	
 	def start_element(self, name):
 		pass
@@ -242,7 +331,11 @@ class XhtmlTokenizer:
 
 
 def isbreakspace(c):
-	# NBSP and narrow NBSP
+	# NBSP and thin NBSP
+	# (Yes, Unicode defines more types of spaces,
+	#  but apparently these are the only ones
+	#  which need non-breaking variants.
+	#  Brillant!)
 	nobreaks = '\u00A0\u202F'
 	return c.isspace() and c not in nobreaks
 
@@ -300,39 +393,17 @@ class TextChecker(XhtmlTokenizer):
 			self.stack[-1].count += 1
 		else:
 			self.stack.append(TextChecker.StackFrame(p, q))
-
-	def __punctuation_check_depth(self):
-		samecount = self.stack[-1].count
-		if samecount > 1:
-			if warn_samequotes:
-				self.output_mark(' ' + OUTPUT_WARN +
-				                 '[' + 
-				                 self.stack[-1].p * samecount + 
-				                 ']')
-			counters.samequotes += 1
-
-			# Return immediately, skipping max_depth check.
-			#
-			# 1) For apostrophe samequotes, we
-			#    generate false positives for
-			#    maxdepth (although this could
-			#    be fixed without too much fuss,
-			#    if anyone needs it).
-			
-			#  2) For quotes which point in the wrong
-			#     direction, we can get multiple mismatch
-			#     and samequotes errors.  They're just
-			#     about readable, but if we show max_depth
-			#     violations as well, there's too much
-			#     variation and it gets much harder to see
-			#     the pattern.
-			#     
-			return
 		
-		d = sum([s.count for s in self.stack])
-		if d > max_depth:
+		samecount = self.stack[-1].count - self.stack[-1].maybe_popped
+		if samecount > 1:
+			if options.do_nesting and not options.allow_same_quotes:
+				self.output_mark(OUTPUT_WARN)
+			counters.samequotes += 1
+	
+		d = sum([s.count - s.maybe_popped for s in self.stack])
+		if options.do_nesting and d > options.max_depth:
 			counters.too_deep += 1
-			self.output_mark(' ' + OUTPUT_WARN + str(d))
+			self.output_mark(OUTPUT_WARN + '[' + str(d) + ']')
 
 	def punctuation_pop(self, q):
 		if not self.stack:
@@ -340,21 +411,20 @@ class TextChecker(XhtmlTokenizer):
 				counters.unmatched_q += 1
 			else:
 				counters.unmatched += 1
-			self.output_mark(' ' + OUTPUT_WARN + '[' + q + ']')
+			
+			self.output_mark(OUTPUT_WARN)
 			return
 		
 		if q != self.stack[-1].q:
 			if len(self.stack) >= 2 and q == self.stack[-2].q and \
 			   self.stack[-1].maybe_popped == self.stack[-1].count:
 				# Looks like the apostrophes we noted may have been close-quotes
-				if mark_ambiguous_apostrophe:
+				if options.do_apostrophe:
 					self.output_mark(' ' + OUTPUT_MARK * self.stack[-1].maybe_popped)
 				self.stack.pop()
 				# Fall through to pop p as well
 			else:
-				self.__punctuation_check_depth()
-				
-				self.output_mark(' ' + OUTPUT_WARN + '[' + self.stack[-1].p + ']')
+				self.output_mark(OUTPUT_WARN + '[' + self.stack[-1].p + '] ')
 				# No attempt at recovery here. We may
 				# generate some confusing-looking errors
 				# until we get to the next paragraph,
@@ -366,8 +436,6 @@ class TextChecker(XhtmlTokenizer):
 					counters.unmatched += 1
 				return
 		
-		self.__punctuation_check_depth()
-		
 		self.stack[-1].count -= 1
 		if self.stack[-1].maybe_popped > self.stack[-1].count:
 			self.stack[-1].maybe_popped = self.stack[-1].count
@@ -375,7 +443,7 @@ class TextChecker(XhtmlTokenizer):
 			self.stack.pop()
 
 	def punctuation_maybe_pop(self, q):
-		if mark_ambiguous_apostrophe:
+		if options.do_apostrophe:
 			self.output_mark(OUTPUT_MARK)
 		
 		if self.stack and self.stack[-1].q == q:
@@ -385,15 +453,13 @@ class TextChecker(XhtmlTokenizer):
 	def punctuation_endpara(self):
 		if self.stack and self.stack[-1].maybe_popped > 0:
 			# Looks like some of the apostrophes we noted might have been close-quotes
-			if mark_ambiguous_apostrophe:
+			if options.do_apostrophe:
 				self.output_mark(' ' + OUTPUT_MARK * self.stack[-1].maybe_popped)
 			self.stack[-1].count -= self.stack[-1].maybe_popped
 			if self.stack[-1].count <= 0:
 				self.stack.pop()
 
 		if self.stack:
-			self.__punctuation_check_depth()
-			
 			self.output_mark(' ' + OUTPUT_WARN + '[')
 			for frame in self.stack:
 				self.output_mark(frame.p)
@@ -430,63 +496,71 @@ class TextChecker(XhtmlTokenizer):
 
 		(prev, cur) = (self.history[-2], self.history[-1])
 
-		# Convert straight quotes (TODO: option)
-		if next == "'":
-			counters.straight_q += 1
-			if isbreakspace(cur):
-				# Could be open-quote OR leading apostrophe.
-				# We assume open-quote.
-				# If we get it wrong, it should get flagged as a quote mismatch error
-				#  - unless there is an ambiguous trailing apostrophe - which is what
-				# the ambiguity markers are there for.
-				next = "‘"
-			else:
-				next = "’"
-			self.xml_token = next
-			
-		elif next == '"':
-			counters.straight_q2 += 1
-			if isbreakspace(cur):
-				next = '“'
-			else:
-				next = '”'
-			self.xml_token = next
+		if not options.ignore_straight_quotes:
+			if next == "'":
+				counters.straight_q += 1
+				if isbreakspace(cur):
+					# Could be open-quote OR leading apostrophe.
+					# We assume open-quote.
+					# If we get it wrong, it should get flagged as a quote mismatch error
+					#  - unless there is an ambiguous trailing apostrophe - which is what
+					# the ambiguity markers are there for.
+					next = "‘"
+				else:
+					next = "’"
+				self.xml_token = next
+				
+			elif next == '"':
+				counters.straight_q2 += 1
+				if isbreakspace(cur):
+					next = '“'
+				else:
+					next = '”'
+				self.xml_token = next
 
-		# Done rewriting; update history
-		del self.history[0]
-		self.history.append(next)
+			# Done rewriting; update history
+			del self.history[0]
+			self.history.append(next)
 		
 		# NOTIMPL: Could do nospace here too
-		# TODO: make optional
+		# TODO: make optional?
 		if cur == '(':
 			self.punctuation_push('()')
 		elif cur == ')':
 			self.punctuation_pop(')')
 
 		elif cur == '“':
-			# TODO: suppress (missing NBSP)
 			if prev.isalnum():
 				counters.unspaced_q += 1
-				self.output_mark(OUTPUT_WARN)
+				if options.do_spacing:
+					self.output_mark(OUTPUT_WARN)
 			if isbreakspace(next):
 				counters.spaced_q += 1
-				self.output_mark(OUTPUT_WARN)
+				if options.do_spacing:
+					self.output_mark(OUTPUT_WARN)
 			self.punctuation_push('“”')
 		elif cur == '”':
 			if isbreakspace(prev):
 				counters.spaced_q += 1
-				self.output_mark(OUTPUT_WARN)
+				if options.do_spacing:
+					self.output_mark(OUTPUT_WARN)
 			if next.isalnum():
 				counters.unspaced_q += 1
-				self.output_mark(OUTPUT_WARN)
+				if options.do_spacing:
+					self.output_mark(OUTPUT_WARN)
 			self.punctuation_pop('”')
 
 		# Open quote
 		elif cur == "‘":
 			counters.openq += 1
-			if prev.isalnum() or isbreakspace(next):
-				counters.misspaced_q += 1
-				self.output_mark(OUTPUT_WARN)
+			if prev.isalnum():
+				counters.unspaced_q += 1
+				if options.do_spacing:
+					self.output_mark(OUTPUT_WARN)
+			if isbreakspace(next):
+				counters.spaced_q += 1
+				if options.do_spacing:
+					self.output_mark(OUTPUT_WARN)
 			self.punctuation_push("‘’")
 
 		elif cur == "’":
@@ -503,12 +577,14 @@ class TextChecker(XhtmlTokenizer):
 					# Should be a start-of-word apostrophe - but there's a possibility it's a wrongly-angled opening quote, and there's usually not too many of these to check.
 					# (FIXME could use a flag of it's own though)
 					counters.leading_apostrophe += 1
-					if mark_leading_apostrophe:
+					if options.do_apostrophe and \
+					   not options.skip_leading_apostrophe:
 						self.output_mark(OUTPUT_MARK)
 				else:
 					if isbreakspace(prev):
 						counters.spaced_q += 1
-						self.output_mark(OUTPUT_WARN)
+						if options.do_spacing:				
+							self.output_mark(OUTPUT_WARN)
 					# Not attached to word - must be a closing quote
 					counters.closeq += 1
 					self.punctuation_pop("’")
@@ -555,60 +631,92 @@ class TextChecker(XhtmlTokenizer):
 # NOT IMPLEMENTED: non-UTF-8 encodings
 # FIXME: python2
 
+
 outfile = sys.stdout
-if not sys.argv[1:]:
+if options.no_output:
+	class NullWriter:
+		def write(self, d):
+			pass
+	outfile = NullWriter()
+
+if not args:
+	if options.modify:
+		print("--modify requires at least one filename")
+		sys.exit(1)
+	
 	infile = sys.stdin
 	TextChecker(outfile).run(infile)
 else:
 	# TODO: make variables into options, write usage
 	
-	# maybe want --noout as well
+	# TODO -n
 	
-	modify = False
-	if sys.argv[1] == '-m' or sys.argv[1] == '--modify':
-		modify = True
-		del sys.argv[1]
-
 	if os.name != 'posix':
 		filenames = []
-		for filename in sys.argv[1:]:
+		for filename in args:
 			filenames += glob.glob(filename)
-		sys.argv[1:] = filenames
+		args = filenames
 
-	for filename in sys.argv[1:]:
+	for filename in args:
 		infile = open(filename, 'r')
-		if modify:
+		if options.modify:
 			outfile = open(filename+".tmp", 'w')
 		
 		TextChecker(outfile).run(infile)
 		
-		if modify:
+		if options.modify:
 			os.rename(filename+".tmp", filename)
 
 report = sys.stderr
 report.write("\nSingle quotes")
-report.write("\n                   open quotes: " + str(counters.openq))
-report.write("\n      unambiguous close quotes: " + str(counters.closeq))
+report.write("\n                    open quotes: " + str(counters.openq))
+report.write("\n       unambiguous close quotes: " + str(counters.closeq))
 report.write("\n")
+
+# remember that curly apostrophes is our USP.
+
+# do only +mismatches (apostrophe samequotes)
+# - limit to apostrophe mismatches only
+
 report.write("\nApostrophes")
 report.write("\n    apostrophe at start of word: " + str(counters.leading_apostrophe))
-report.write("\n      ambiguous close-quote /")
+report.write("\n    ambiguous close-quote /")
 report.write("\n      apostrophe at end of word: " + str(counters.ambiguous_apostrophe))
 report.write("\n")
-report.write("\nQuote spacing")
-report.write("\n              unexpected spaces: " + str(counters.spaced_q))
-report.write("\n                 missing spaces: " + str(counters.unspaced_q))
-report.write("\n")
+
 report.write("\nUnmatched quotes and brackets")
 report.write("\n   single quotes (conservative): " + str(counters.unmatched_q))
 report.write("\n   double quotes and brackets  : " + str(counters.unmatched))
 report.write("\n")
+
+#FIXME --nested-quotes --allow-samequotes
 report.write("\nNested quotations")
-report.write("\n      with same style of quotes: " + str(counters.samequotes))
-report.write("\n          nested " + str(max_depth + 1) +
+report.write("\n          nested " + str(options.max_depth + 1) +
                                  " deep or more: " + str(counters.too_deep))
+report.write("\n      with same style of quotes: " + str(counters.samequotes))
 report.write("\n")
+
+# TODO document
+#  - check cases with no spaces, which might have been mis-handled
+#  - this will also happen to flag up:
+#    - extra spaces from OCR, which can often cause quotes to go in the wrong direction
+#    - absence of NBSP in adjacent nested quotation marks
+#    - absence of NBSP around en dash just inside quotation mark
+#    - as above, for spaced out elipsis
+#    (and any similar unsual typographic features)
+# 
+
+# TODO need to document NBSP specifically, because the distinction is technical and not obvious to the eye
+
+report.write("\nQuote spacing")
+report.write("\n              unexpected spaces: " + str(counters.spaced_q))
+report.write("\n                 missing spaces: " + str(counters.unspaced_q))
+report.write("\n")
+
+# TODO document as defaulting to open-quotes (with user free to search+replace all)
 report.write("\nStraight quote characters")
 report.write("\n         straight single quotes: " + str(counters.straight_q))
-report.write("\n         straught double quotes: " + str(counters.straight_q2))
+report.write("\n         straight double quotes: " + str(counters.straight_q2))
 report.write("\n")
+
+#TODO: progress indication
