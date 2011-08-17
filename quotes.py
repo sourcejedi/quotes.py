@@ -334,7 +334,10 @@ class XhtmlTokenizer:
 					self.character_data(unichr(c))
 				else:
 					name = self.xml_token[1:-1]
-					c = unichr(htmlentitydefs.name2codepoint[name])
+					if name == 'apos':
+						c = u"'"
+					else:
+						c = unichr(htmlentitydefs.name2codepoint[name])
 					self.character_data(c)
 			else:
 				self.character_data(c)
