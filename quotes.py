@@ -1,6 +1,12 @@
 #!/usr/bin/env python
 # -*- coding: UTF-8
 
+# quotes.py
+#
+# Tool for converting to and/or checking "smart quotes" in long HTML documents.
+#
+# <https://github.com/sourcejedi/quotes.py>
+
 # This script was originally developed using python3;
 # it should convert back very nicely using 2to3
 # (for best results, remove all use of unicode() first :).
@@ -16,9 +22,9 @@ import htmlentitydefs
 #
 #  test cases / examples / docs
 #
-# Ideally, we should be able to turn off checking of brackets, in case of false positives.
+# Ideally, we should be able to turn off checking brackets, in case of false positives.
 #
-# Will silently clobber files with .tmp extension
+# We're silently clobbering files with a .tmp extension
 
 # NOT IMPLEMENTED:
 #  Character encoding must be specified manually (if not UTF-8).
@@ -31,6 +37,8 @@ import htmlentitydefs
 
 opt = optparse.OptionParser(usage=
 """%prog [operations] [options] [FILES]
+
+Check and/or convert to "smart quotes" in HTML.
 
 If no operations are specified, --all is assumed.""")
 
