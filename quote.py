@@ -1,29 +1,30 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 # -*- coding: UTF-8
+
+# This script was originally developed using python3;
+# it should convert back very nicely using 2to3.
 
 import sys
 import os
 import glob
 import optparse
 import io
-
-try:
-	import html.entities
-except ImportError:
-	# PYTHON2
-	class html:
-		import htmlentitydefs as entities
+import htmlentitydefs
 
 # TODO list:
 #
-#  test cases / examples
+#  test cases / examples / docs
+#
+# Ideally, we should be able to turn off checking of brackets, in case of false positives.
 
 # NOT IMPLEMENTED:
-#  character encoding must be specified manually (if not UTF-8)
+#  Character encoding must be specified manually (if not UTF-8).
 #  <q> tags will be ignored
 #  <pre> will be treated as one big paragraph
 #  <br> - even multiple successive line breaks 
 #         will not be treated as a paragraph break
+#
+# We don't have any progress indicator, and we can take e.g. 30s to run on my EeePC.
 
 opt = optparse.OptionParser(usage="%prog [operations] [options] [FILES]")
 
@@ -68,7 +69,7 @@ opt_conf.add_option('--ignore-straight-quotes',
 		"(this implies they will not be checked at all)")
 
 opt_conf.add_option('--warning-mark',
-	dest="WARN", default='#', metavar="MARK",
+	dest="WARN", default=u'#', metavar="MARK",
 	help='warning marker used by most operations, default is "%default"')
 opt.add_option_group(opt_conf)
 
@@ -78,7 +79,7 @@ opt_conf.add_option('--skip-leading-apostrophes',
 	action="store_true", dest="skip_leading_apostrophe",
 	help="don't mark apostrophes at the start of words")
 
-opt_conf.add_option('--mark', dest="MARK", default='*',
+opt_conf.add_option('--mark', dest="MARK", default=u'*',
 	help='marker for ambiguous apostrophes, default is "%default"')
 opt.add_option_group(opt_conf)
 
@@ -122,8 +123,8 @@ if options.do_all:
 
 # Ambiguities and warnings are marked
 # with these characters in our output.
-OUTPUT_MARK = options.MARK # "*"
-OUTPUT_WARN = options.WARN # "#"
+OUTPUT_MARK = unicode(options.MARK) # "*"
+OUTPUT_WARN = unicode(options.WARN) # "#"
 
 
 class Counters:
@@ -199,7 +200,7 @@ INVISIBLE_ELEMENTS = ['script', 'style']
 class XhtmlTokenizer:
 	"""Gonzo xhtml tokenizer.
 	
-	Callbacks based on expat, except no attribute info,
+	Callbacks based on expat, except no attribute data,
 	and text is delivered one character at a time.
 	"""
 	
@@ -235,22 +236,22 @@ class XhtmlTokenizer:
 			c = first_c
 			
 			end_tag = False
-			if c == '/':
+			if c == u'/':
 				end_tag = True
 				c = read_char()				
 			
-			name = ''
-			while c.isalnum() or c == ':':
+			name = u''
+			while c.isalnum() or c == u':':
 				name += c
 				c = read_char()
 			assert name
 			
-			while c != '>':
+			while c != u'>':
 				c = read_char()
 			
 			if end_tag:
 				self.end_element(name)
-			elif self.xml_token[-2] == '/':
+			elif self.xml_token[-2] == u'/':
 				self.empty_element(name)
 			else:
 				self.start_element(name)
@@ -267,24 +268,24 @@ class XhtmlTokenizer:
 			
 			c = read_char()
 			while True:
-				while c != ']':
+				while c != u']':
 					self.character_data(c)
 					self.xml_token = ''
 					c = read_char()
 				
 				c = read_char()
-				if c != ']':
-					feed(']')
+				if c != u']':
+					feed(u']')
 					feed(c)
 					continue
 				
 				c = read_char()
-				if c != '>':
-					feed(']')
-					feed(']')
+				if c != u'>':
+					feed(u']')
+					feed(u']')
 					feed(c)
 				
-				self.xml_token = ']]>'
+				self.xml_token = u']]>'
 				self.noncharacter_data()
 				return
 
@@ -295,41 +296,41 @@ class XhtmlTokenizer:
 
 		c = read_char()
 		while c:
-			if c == '<':
+			if c == u'<':
 				c = read_char()
 				
-				if c == '!':
+				if c == u'!':
 					c = read_char()
-					if c == '-':
+					if c == u'-':
 						c = read_char()
-						assert c == '-'
-						read_noncharacter_data('-->')
-					elif c == '[':
-						start_token('<![CDATA[')
+						assert c == u'-'
+						read_noncharacter_data(u'-->')
+					elif c == u'[':
+						start_token(u'<![CDATA[')
 						self.noncharacter_data()
-						self.xml_token = ''
+						self.xml_token = u''
 						
 						read_cdata()
 					else:
-						start_token('<!DOCTYPE')
-						read_noncharacter_data('>')
-				elif c == '?':
-					read_noncharacter_data('?>')
+						start_token(u'<!DOCTYPE')
+						read_noncharacter_data(u'>')
+				elif c == u'?':
+					read_noncharacter_data(u'?>')
 				else:
 					read_tag(c)
-			elif c == '&':
-				while c != ';':
+			elif c == u'&':
+				while c != u';':
 					c = read_char()
 				
-				if self.xml_token[1] == '#':	
-					if self.xml_token[2].lower() == 'x':
+				if self.xml_token[1] == u'#':	
+					if self.xml_token[2].lower() == u'x':
 						c = int(self.xml_token[3:-1], 0x10)
 					else:
 						c = int(self.xml_token[2:-1])
 					self.character_data(chr(c))
 				else:
 					name = self.xml_token[1:-1]
-					c = html.entities.entitydefs[name]
+					c = htmlentitydefs.entitydefs[name]
 					self.character_data(c)
 			else:
 				self.character_data(c)
@@ -343,7 +344,7 @@ def isbreakspace(c):
 	#  but apparently these are the only ones
 	#  which need non-breaking variants.
 	#  Brillant!)
-	nobreaks = '\u00A0\u202F'
+	nobreaks = u'\u00A0\u202F'
 	return c.isspace() and c not in nobreaks
 
 
@@ -410,11 +411,11 @@ class TextChecker(XhtmlTokenizer):
 		d = sum([s.count - s.maybe_popped for s in self.stack])
 		if options.do_nesting and d > options.max_depth:
 			counters.too_deep += 1
-			self.output_mark(OUTPUT_WARN + '[' + str(d) + ']')
+			self.output_mark(OUTPUT_WARN + u'[' + unicode(d) + u']')
 
 	def punctuation_pop(self, q):
 		if not self.stack:
-			if q == "’":
+			if q == u"’":
 				counters.unmatched_q += 1
 			else:
 				counters.unmatched += 1
@@ -431,13 +432,13 @@ class TextChecker(XhtmlTokenizer):
 				self.stack.pop()
 				# Fall through to pop p as well
 			else:
-				self.output_mark(OUTPUT_WARN + '[' + self.stack[-1].p + '] ')
+				self.output_mark(OUTPUT_WARN + u'[' + self.stack[-1].p + u'] ')
 				# No attempt at recovery here. We may
 				# generate some confusing-looking errors
 				# until we get to the next paragraph,
 				# though they're still pretty easy to
 				# understand if you know what we're doing.
-				if q == "’" or self.stack[-1].p == "‘":
+				if q == u"’" or self.stack[-1].p == u"‘":
 					counters.unmatched_q += 1
 				else:
 					counters.unmatched += 1
@@ -461,22 +462,22 @@ class TextChecker(XhtmlTokenizer):
 		if self.stack and self.stack[-1].maybe_popped > 0:
 			# Looks like some of the apostrophes we noted might have been close-quotes
 			if options.do_apostrophe:
-				self.output_mark(' ' + OUTPUT_MARK * self.stack[-1].maybe_popped)
+				self.output_mark(u' ' + OUTPUT_MARK * self.stack[-1].maybe_popped)
 			self.stack[-1].count -= self.stack[-1].maybe_popped
 			if self.stack[-1].count <= 0:
 				self.stack.pop()
 
 		if self.stack:
-			self.output_mark(' ' + OUTPUT_WARN + '[')
+			self.output_mark(u' ' + OUTPUT_WARN + u'[')
 			for frame in self.stack:
 				self.output_mark(frame.p)
 				
 				# This may cause some errors to be counted twice
-				if frame.p == "‘":
+				if frame.p == u"‘":
 					counters.unmatched_q += 1
 				else:
 					counters.unmatched += 1
-			self.output_mark(']')
+			self.output_mark(u']')
 			self.stack = []
 	
 	__slots__ += ('history', 'hidden_element')
@@ -491,7 +492,7 @@ class TextChecker(XhtmlTokenizer):
 		#
 		# We can insert a marker after the middle character
 		# using output_mark()
-		self.history = ["\n", "\n", "\n"]
+		self.history = [u"\n", u"\n", u"\n"]
 
 		self.hidden_element = []
 
@@ -504,7 +505,7 @@ class TextChecker(XhtmlTokenizer):
 		(prev, cur) = (self.history[-2], self.history[-1])
 
 		if not options.ignore_straight_quotes:
-			if next == "'":
+			if next == u"'":
 				counters.straight_q += 1
 				if isbreakspace(cur):
 					# Could be open-quote OR leading apostrophe.
@@ -512,31 +513,30 @@ class TextChecker(XhtmlTokenizer):
 					# If we get it wrong, it should get flagged as a quote mismatch error
 					#  - unless there is an ambiguous trailing apostrophe - which is what
 					# the ambiguity markers are there for.
-					next = "‘"
+					next = u"‘"
 				else:
-					next = "’"
+					next = u"’"
 				self.xml_token = next
 				
-			elif next == '"':
+			elif next == u'"':
 				counters.straight_q2 += 1
 				if isbreakspace(cur):
-					next = '“'
+					next = u'“'
 				else:
-					next = '”'
+					next = u'”'
 				self.xml_token = next
 
 			# Done rewriting; update history
 			del self.history[0]
 			self.history.append(next)
 		
-		# NOTIMPL: Could do nospace here too
-		# TODO: make optional?
-		if cur == '(':
-			self.punctuation_push('()')
-		elif cur == ')':
-			self.punctuation_pop(')')
+		# TODO: make optional, in case of non-standard usage?
+		if cur == u'(':
+			self.punctuation_push(u'()')
+		elif cur == u')':
+			self.punctuation_pop(u')')
 
-		elif cur == '“':
+		elif cur == u'“':
 			if prev.isalnum():
 				counters.unspaced_q += 1
 				if options.do_spacing:
@@ -545,8 +545,8 @@ class TextChecker(XhtmlTokenizer):
 				counters.spaced_q += 1
 				if options.do_spacing:
 					self.output_mark(OUTPUT_WARN)
-			self.punctuation_push('“”')
-		elif cur == '”':
+			self.punctuation_push(u'“”')
+		elif cur == u'”':
 			if isbreakspace(prev):
 				counters.spaced_q += 1
 				if options.do_spacing:
@@ -555,10 +555,10 @@ class TextChecker(XhtmlTokenizer):
 				counters.unspaced_q += 1
 				if options.do_spacing:
 					self.output_mark(OUTPUT_WARN)
-			self.punctuation_pop('”')
+			self.punctuation_pop(u'”')
 
 		# Open quote
-		elif cur == "‘":
+		elif cur == u"‘":
 			counters.openq += 1
 			if prev.isalnum():
 				counters.unspaced_q += 1
@@ -568,9 +568,9 @@ class TextChecker(XhtmlTokenizer):
 				counters.spaced_q += 1
 				if options.do_spacing:
 					self.output_mark(OUTPUT_WARN)
-			self.punctuation_push("‘’")
+			self.punctuation_push(u"‘’")
 
-		elif cur == "’":
+		elif cur == u"’":
 			if prev.isalpha():
 				if next.isalpha():
 					# Internal, must be apostrophe
@@ -578,7 +578,7 @@ class TextChecker(XhtmlTokenizer):
 				else:
 					# Ambiguous - could be end-of-word apostrophe OR closing quote
 					counters.ambiguous_apostrophe += 1
-					self.punctuation_maybe_pop("’")
+					self.punctuation_maybe_pop(u"’")
 			else:
 				if next.isalnum():
 					# Should be a start-of-word apostrophe - but there's a possibility it's a wrongly-angled opening quote, and there's usually not too many of these to check.
@@ -594,19 +594,19 @@ class TextChecker(XhtmlTokenizer):
 							self.output_mark(OUTPUT_WARN)
 					# Not attached to word - must be a closing quote
 					counters.closeq += 1
-					self.punctuation_pop("’")
+					self.punctuation_pop(u"’")
 
 	def character_data(self, c):	
 		if not self.hidden_element:
 			# All whitespace characters are treated the same
 			# (apart from NBSP)
 			if isbreakspace(c):
-				c = ' '
+				c = u' '
 			self.__character(c)
 		self.flush_tokens()
 
 	def __paragraph_break(self):
-		self.__character('\n')
+		self.__character(u'\n')
 		self.punctuation_endpara()
 
 	def start_element(self, name, *_):
@@ -687,11 +687,6 @@ report.write("\n                    open quotes: " + str(counters.openq))
 report.write("\n       unambiguous close quotes: " + str(counters.closeq))
 report.write("\n")
 
-# remember that curly apostrophes is our USP.
-
-# do only +mismatches (apostrophe samequotes)
-# - limit to apostrophe mismatches only
-
 report.write("\nApostrophes")
 report.write("\n    apostrophe at start of word: " + str(counters.leading_apostrophe))
 report.write("\n    ambiguous close-quote /")
@@ -703,14 +698,13 @@ report.write("\n   single quotes (conservative): " + str(counters.unmatched_q))
 report.write("\n   double quotes and brackets  : " + str(counters.unmatched))
 report.write("\n")
 
-#FIXME --nested-quotes --allow-samequotes
 report.write("\nNested quotations")
 report.write("\n          nested " + str(options.max_depth + 1) +
                                  " deep or more: " + str(counters.too_deep))
 report.write("\n      with same style of quotes: " + str(counters.samequotes))
 report.write("\n")
 
-# TODO document
+# TODO this is documentation
 #  - check cases with no spaces, which might have been mis-handled
 #  - this will also happen to flag up:
 #    - extra spaces from OCR, which can often cause quotes to go in the wrong direction
@@ -719,7 +713,6 @@ report.write("\n")
 #    - as above, for spaced out elipsis
 #    (and any similar unsual typographic features)
 # 
-
 # TODO need to document NBSP specifically, because the distinction is technical and not obvious to the eye
 
 report.write("\nQuote spacing")
@@ -732,5 +725,3 @@ report.write("\nStraight quote characters")
 report.write("\n         straight single quotes: " + str(counters.straight_q))
 report.write("\n         straight double quotes: " + str(counters.straight_q2))
 report.write("\n")
-
-#TODO: progress indication
