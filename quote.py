@@ -29,7 +29,10 @@ import htmlentitydefs
 #
 # We don't have any progress indicator, and we can take e.g. 30s to run on my EeePC.
 
-opt = optparse.OptionParser(usage="%prog [operations] [options] [FILES]")
+opt = optparse.OptionParser(usage=
+"""%prog [operations] [options] [FILES]
+
+If no operations are specified, --all is assumed.""")
 
 opt.add_option('-m', '--modify',
 	action="store_true", dest="modify",
@@ -40,10 +43,6 @@ opt.add_option('--encoding',
 
 
 opt_do = optparse.OptionGroup(opt, 'Operations')
-opt_do.add_option('-n', '--none',
-	action="store_true", dest="no_output",
-	help="show statistics only")
-
 opt_do.add_option('-a', '--all',
 	action="store_true", dest="do_all")
 
@@ -106,17 +105,9 @@ opt.add_option_group(opt_conf)
 ops = [option for option in options.__dict__ if option.startswith('do_')]
 
 do_ops = [op for op in ops if getattr(options, op)]
-if do_ops:
-	if options.no_output:
-		print("-n / --none doesn't make sense with any other operation")
-		sys.exit(1)
-else:
-	if options.modify:
-		# --modify defaults to --all
-		options.do_all = True
-	else:
-		# otherwise default to --none
-		options.do_none = True
+if not do_ops:
+	# default to --all
+	options.do_all = True
 
 if options.do_all:
 	# --all enables every operation
@@ -425,7 +416,8 @@ class TextChecker(XhtmlTokenizer):
 			else:
 				counters.unmatched += 1
 			
-			self.output_mark(OUTPUT_WARN)
+			if options.do_mismatch:
+				self.output_mark(OUTPUT_WARN)
 			return
 		
 		if q != self.stack[-1].q:
@@ -437,12 +429,13 @@ class TextChecker(XhtmlTokenizer):
 				self.stack.pop()
 				# Fall through to pop p as well
 			else:
-				self.output_mark(OUTPUT_WARN + u'[' + self.stack[-1].p + u'] ')
+				if options.do_mismatch:
+					self.output_mark(OUTPUT_WARN + u'[' + self.stack[-1].p + u'] ')
 				# No attempt at recovery here. We may
 				# generate some confusing-looking errors
 				# until we get to the next paragraph,
-				# though they're still pretty easy to
-				# understand if you know what we're doing.
+				# though they're still possible to understand
+				# if you know what we're doing.
 				if q == u"’" or self.stack[-1].p == u"‘":
 					counters.unmatched_q += 1
 				else:
@@ -473,17 +466,18 @@ class TextChecker(XhtmlTokenizer):
 				self.stack.pop()
 
 		if self.stack:
-			self.output_mark(u' ' + OUTPUT_WARN + u'[')
-			for frame in self.stack:
-				self.output_mark(frame.p)
-				
-				# This may cause some errors to be counted twice
-				if frame.p == u"‘":
-					counters.unmatched_q += 1
-				else:
-					counters.unmatched += 1
-			self.output_mark(u']')
-			self.stack = []
+			if options.do_mismatch:
+				self.output_mark(u' ' + OUTPUT_WARN + u'[')
+				for frame in self.stack:
+					self.output_mark(frame.p)
+					
+					# This may cause some errors to be counted twice
+					if frame.p == u"‘":
+						counters.unmatched_q += 1
+					else:
+						counters.unmatched += 1
+				self.output_mark(u']')
+				self.stack = []
 	
 	__slots__ += ('history', 'hidden_element')
 	def __init__(self, outfile):
@@ -645,22 +639,21 @@ class TextChecker(XhtmlTokenizer):
 infile = sys.stdin
 outfile = sys.stdout
 
-# PYTHON2: fallback for unicode stdin/stdout
+# python2: fallback to get unicode stdin/stdout
 # (twice as slow... though at least it respects --encoding, unlike what'll happen with python3)
 if hasattr(infile.read(0), 'decode'):
 	import codecs
 	infile = codecs.getreader(options.encoding)(infile)
 	outfile = codecs.getwriter(options.encoding)(outfile, errors='xmlcharrefreplace')
 
-if options.no_output:
-	class NullWriter:
-		def write(self, d):
-			pass
-		def flush(self):
-			pass
-		def close(self):
-			pass
-	outfile = NullWriter()
+#class NullWriter:
+#	def write(self, d):
+#		pass
+#	def flush(self):
+#		pass
+#	def close(self):
+#		pass
+#outfile = NullWriter()
 
 if not args:
 	if options.modify:
@@ -714,7 +707,7 @@ report.write("\n          nested " + str(options.max_depth + 1) +
 report.write("\n      with same style of quotes: " + str(counters.samequotes))
 report.write("\n")
 
-# TODO this is documentation
+# TODO this is documentation:
 #  - check cases with no spaces, which might have been mis-handled
 #  - this will also happen to flag up:
 #    - extra spaces from OCR, which can often cause quotes to go in the wrong direction
