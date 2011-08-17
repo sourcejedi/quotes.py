@@ -5,15 +5,34 @@ import sys
 import os
 import glob
 import optparse
-import html.entities # htmlentitydefs
+import io
 
-# TODO disable line ending conversion
+try:
+	import html.entities
+except ImportError:
+	# PYTHON2
+	class html:
+		import htmlentitydefs as entities
+
+# TODO list:
+#
+#  test cases / examples
+
+# NOT IMPLEMENTED:
+#  character encoding must be specified manually (if not UTF-8)
+#  <q> tags will be ignored
+#  <pre> will be treated as one big paragraph
+#  <br> - even multiple successive line breaks 
+#         will not be treated as a paragraph break
 
 opt = optparse.OptionParser(usage="%prog [operations] [options] [FILES]")
 
 opt.add_option('-m', '--modify',
 	action="store_true", dest="modify",
 	help="modify original file(s)")
+
+opt.add_option('--encoding',
+	dest="encoding", default="UTF-8")
 
 
 opt_do = optparse.OptionGroup(opt, 'Operations')
@@ -105,18 +124,6 @@ if options.do_all:
 # with these characters in our output.
 OUTPUT_MARK = options.MARK # "*"
 OUTPUT_WARN = options.WARN # "#"
-
-
-# TODO list:
-#  character encoding
-#
-#  test cases / examples
-
-# NOT IMPLEMENTED:
-#  <q> tags will simply be ignored
-#  <pre> will be treated as one big paragraph
-#  <br> - even multiple successive line breaks 
-#         will not be treated as a paragraph break
 
 
 class Counters:
@@ -628,14 +635,20 @@ class TextChecker(XhtmlTokenizer):
 		self.flush_tokens()
 
 
-# NOT IMPLEMENTED: non-UTF-8 encodings
-# FIXME: python2
-
-
+infile = sys.stdin
 outfile = sys.stdout
+
+# PYTHON2: fallback for unicode stdin/stdout (much slower)
+if hasattr(infile.read(0), 'decode'):
+	import codecs
+	infile = codecs.getreader(options.encoding)(infile)
+	outfile = codecs.getwriter(options.encoding)(outfile)
+
 if options.no_output:
 	class NullWriter:
 		def write(self, d):
+			pass
+		def close(self):
 			pass
 	outfile = NullWriter()
 
@@ -644,13 +657,10 @@ if not args:
 		print("--modify requires at least one filename")
 		sys.exit(1)
 	
-	infile = sys.stdin
 	TextChecker(outfile).run(infile)
+	infile.close()
+	outfile.close()
 else:
-	# TODO: make variables into options, write usage
-	
-	# TODO -n
-	
 	if os.name != 'posix':
 		filenames = []
 		for filename in args:
@@ -658,14 +668,18 @@ else:
 		args = filenames
 
 	for filename in args:
-		infile = open(filename, 'r')
+		infile = io.open(filename, 'r', encoding=options.encoding, newline='\n')
 		if options.modify:
-			outfile = open(filename+".tmp", 'w')
+			outfile = io.open(filename+".tmp", 'w', encoding=options.encoding, newline='\n')
 		
 		TextChecker(outfile).run(infile)
 		
 		if options.modify:
 			os.rename(filename+".tmp", filename)
+		
+		infile.close()
+		outfile.close()
+
 
 report = sys.stderr
 report.write("\nSingle quotes")
