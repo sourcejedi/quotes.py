@@ -2,7 +2,8 @@
 # -*- coding: UTF-8
 
 # This script was originally developed using python3;
-# it should convert back very nicely using 2to3.
+# it should convert back very nicely using 2to3
+# (for best results, remove all use of unicode() first :).
 
 import sys
 import os
@@ -16,6 +17,8 @@ import htmlentitydefs
 #  test cases / examples / docs
 #
 # Ideally, we should be able to turn off checking of brackets, in case of false positives.
+#
+# Will silently clobber files with .tmp extension
 
 # NOT IMPLEMENTED:
 #  Character encoding must be specified manually (if not UTF-8).
@@ -161,6 +164,8 @@ counters = Counters()
 # (which would default to display:inline).
 #
 # Table cells and list items are also included.
+#
+# python 2: left these as non-unicode strings for clarity; they're all ASCII anyway.
 #
 PARAGRAPH_ELEMENTS = [
 	'p',
@@ -327,10 +332,10 @@ class XhtmlTokenizer:
 						c = int(self.xml_token[3:-1], 0x10)
 					else:
 						c = int(self.xml_token[2:-1])
-					self.character_data(chr(c))
+					self.character_data(unichr(c))
 				else:
 					name = self.xml_token[1:-1]
-					c = htmlentitydefs.entitydefs[name]
+					c = unichr(htmlentitydefs.name2codepoint[name])
 					self.character_data(c)
 			else:
 				self.character_data(c)
@@ -571,9 +576,10 @@ class TextChecker(XhtmlTokenizer):
 			self.punctuation_push(u"‘’")
 
 		elif cur == u"’":
-			if prev.isalpha():
+			if prev.isalnum():
 				if next.isalpha():
 					# Internal, must be apostrophe
+					# NOTE: This will trigger when apostrophes are used as a thousands separator
 					pass
 				else:
 					# Ambiguous - could be end-of-word apostrophe OR closing quote
@@ -581,8 +587,9 @@ class TextChecker(XhtmlTokenizer):
 					self.punctuation_maybe_pop(u"’")
 			else:
 				if next.isalnum():
-					# Should be a start-of-word apostrophe - but there's a possibility it's a wrongly-angled opening quote, and there's usually not too many of these to check.
-					# (FIXME could use a flag of it's own though)
+					# Should be a start-of-word apostrophe - 
+					# but there's a possibility it's a wrongly-angled opening quote,
+					# and there's usually not too many of these to check.
 					counters.leading_apostrophe += 1
 					if options.do_apostrophe and \
 					   not options.skip_leading_apostrophe:
@@ -638,15 +645,18 @@ class TextChecker(XhtmlTokenizer):
 infile = sys.stdin
 outfile = sys.stdout
 
-# PYTHON2: fallback for unicode stdin/stdout (much slower)
+# PYTHON2: fallback for unicode stdin/stdout
+# (twice as slow... though at least it respects --encoding, unlike what'll happen with python3)
 if hasattr(infile.read(0), 'decode'):
 	import codecs
 	infile = codecs.getreader(options.encoding)(infile)
-	outfile = codecs.getwriter(options.encoding)(outfile)
+	outfile = codecs.getwriter(options.encoding)(outfile, errors='xmlcharrefreplace')
 
 if options.no_output:
 	class NullWriter:
 		def write(self, d):
+			pass
+		def flush(self):
 			pass
 		def close(self):
 			pass
@@ -658,8 +668,6 @@ if not args:
 		sys.exit(1)
 	
 	TextChecker(outfile).run(infile)
-	infile.close()
-	outfile.close()
 else:
 	if os.name != 'posix':
 		filenames = []
@@ -670,16 +678,18 @@ else:
 	for filename in args:
 		infile = io.open(filename, 'r', encoding=options.encoding, newline='\n')
 		if options.modify:
-			outfile = io.open(filename+".tmp", 'w', encoding=options.encoding, newline='\n')
+			outfile = io.open(filename+".tmp", 'w', encoding=options.encoding, errors='xmlcharrefreplace', newline='\n')
 		
 		TextChecker(outfile).run(infile)
 		
 		if options.modify:
 			os.rename(filename+".tmp", filename)
+			outfile.close()
 		
 		infile.close()
-		outfile.close()
 
+if not options.modify:
+	outfile.flush()
 
 report = sys.stderr
 report.write("\nSingle quotes")
