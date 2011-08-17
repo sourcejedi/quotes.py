@@ -166,7 +166,7 @@ PARAGRAPH_ELEMENTS = [
 	'hr',
 
 	# Table cells, table heading cells, list items
-	'td', 'th', 'li'
+	'td', 'th', 'li',
 
 	'html',
 	'title',
