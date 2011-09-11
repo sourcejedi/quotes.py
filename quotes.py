@@ -441,7 +441,7 @@ class TextChecker(XhtmlTokenizer):
 				# Fall through to pop p as well
 			else:
 				if options.do_mismatch:
-					self.output_mark(OUTPUT_WARN + u'[' + self.stack[-1].p + u'] ')
+					self.output_mark(OUTPUT_WARN + u'[' + self.stack[-1].p + u']')
 				# No attempt at recovery here. We may
 				# generate some confusing-looking errors
 				# until we get to the next paragraph,
@@ -488,7 +488,7 @@ class TextChecker(XhtmlTokenizer):
 					else:
 						counters.unmatched += 1
 				self.output_mark(u']')
-				self.stack = []
+			self.stack = []
 	
 	__slots__ += ('history', 'hidden_element')
 	def __init__(self, outfile):
