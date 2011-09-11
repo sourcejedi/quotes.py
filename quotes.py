@@ -9,7 +9,7 @@
 
 # This script was originally developed using python3;
 # it should convert back very nicely using 2to3
-# (for best results, remove all use of unicode() first :).
+# (for best results, remove all use of unicode() and (object) first :).
 
 import sys
 import os
@@ -20,11 +20,16 @@ import htmlentitydefs
 
 # TODO list:
 #
-#  test cases / examples / docs
+# docs
+# automated tests?
 #
 # Ideally, we should be able to turn off checking brackets, in case of false positives.
 #
 # We're silently clobbering files with a .tmp extension
+
+# --strict-british
+# --strict-american
+# (like samequotes, but with a set starting quote type)
 
 # NOT IMPLEMENTED:
 #  Character encoding must be specified manually (if not UTF-8).
@@ -153,6 +158,10 @@ counters = Counters()
 
 
 #
+# <reusable>
+#
+
+#
 # PARAGRAPH_ELEMENTS
 #
 # A list of the HTML elements which indicate a new paragraph.
@@ -201,7 +210,7 @@ PARAGRAPH_ELEMENTS = [
 INVISIBLE_ELEMENTS = ['script', 'style']
 
 
-class XhtmlTokenizer:
+class XhtmlTokenizer(object):
 	"""Gonzo xhtml tokenizer.
 	
 	Callbacks based on expat, except no attribute data,
@@ -346,13 +355,85 @@ class XhtmlTokenizer:
 
 
 def isbreakspace(c):
-	# NBSP and thin NBSP
-	# (Yes, Unicode defines more types of spaces,
-	#  but apparently these are the only ones
-	#  which need non-breaking variants.
-	#  Brillant!)
+	# NBSP and thin NBSP (Unicode defines more types of spaces,
+	#    but it seems only two type have non-breaking variants)
 	nobreaks = u'\u00A0\u202F'
 	return c.isspace() and c not in nobreaks
+
+
+# Stack to keep track of the current "open" punctuation marks,
+# with a _limited_ non-deterministic pop() used to handle
+# apostrophes which might be close-quote characters
+
+class PunctuationFrame(object):
+	__slots__ = (
+		'p',		# open-punctuation character
+		'q',		# close-punctuation character
+		'opened',
+		'maybe_closed')
+	
+	def __init__(self, p, q, opened=1, maybe_closed=0):
+		self.p = p
+		self.q = q
+		self.opened = opened
+		self.maybe_closed = maybe_closed
+	
+	def __repr__(self):
+		return 'PunctuationFrame' + \
+		repr((self.p, self.q, self.opened, self.maybe_closed))
+
+class PunctuationStack(object):
+	# This stack is used for code/concept-sharing
+	# It is not strongly encapsulated.
+	# The underscore on ._frames is just a warning
+	__slots__ = ('_frames')
+	
+	def __init__(self):
+		self._frames = []
+	
+	def __nonzero__(self):
+		return bool(self._frames)
+	
+	def top(self):
+		return self._frames[-1]
+
+	def open(self, p, q):
+		if self._frames and self._frames[-1].p == p:
+			self._frames[-1].opened += 1
+		else:
+			self._frames.append(PunctuationFrame(p, q))
+	
+	def close(self, q):
+		if not self._frames:
+			raise IndexError() # [].pop()
+		if self._frames[-1].q != q:
+			raise ValueError() # [].index(p)
+		
+		self._frames[-1].opened -= 1
+		if self._frames[-1].maybe_closed > self._frames[-1].opened:
+			self._frames[-1].maybe_closed = self._frames[-1].opened
+		
+		if self._frames[-1].opened <= 0:
+			self._frames.pop()
+	
+	def maybe_close(self, q):
+		if not self._frames:
+			return
+		if self._frames[-1].q != q:
+			return
+			
+		if self._frames[-1].maybe_closed < self._frames[-1].opened:
+			self._frames[-1].maybe_closed += 1
+	
+	def close_maybes(self):
+		self._frames[-1].opened -= self._frames[-1].maybe_closed
+		
+		if self._frames[-1].opened <= 0:
+			self._frames.pop()
+
+#
+# </reusable>
+#
 
 
 class TextChecker(XhtmlTokenizer):
@@ -382,46 +463,30 @@ class TextChecker(XhtmlTokenizer):
 		# before any buffered output
 		self.outfile.write(mark)
 
-	# Stack to keep track of the current "open" punctuation marks,
-	# with a _limited_ non-deterministic pop() used to handle
-	# apostrophes which might be close-quote characters
-	class StackFrame:
-		__slots__ = ('p', 'q', 'count', 'maybe_popped')
-		
-		def __init__(self, p, q, count=1, maybe_popped=0):
-			self.p = p
-			self.q = q
-			self.count = count
-			self.maybe_popped = maybe_popped
-		
-		def __repr__(self):
-			return 'StackFrame' + \
-			repr((self.p, self.count, self.maybe_popped))
-
-	__slots__ += ('stack',)
+	__slots__ += ('punct',)
 	def punctuation_init(self):
-		self.stack = []
+		self.punct = PunctuationStack()
 
-	def punctuation_push(self, pq):
+	def punctuation_open(self, pq):
 		(p, q) = pq
-		if self.stack and self.stack[-1].p == p:
-			self.stack[-1].count += 1
-		else:
-			self.stack.append(TextChecker.StackFrame(p, q))
+		self.punct.open(p, q)
 		
-		samecount = self.stack[-1].count - self.stack[-1].maybe_popped
+		samecount = self.punct.top().opened - self.punct.top().maybe_closed
 		if samecount > 1:
 			if options.do_nesting and not options.allow_same_quotes:
 				self.output_mark(OUTPUT_WARN)
 			counters.samequotes += 1
 	
-		d = sum([s.count - s.maybe_popped for s in self.stack])
+		d = sum([s.opened - s.maybe_closed for s in self.punct._frames])
 		if options.do_nesting and d > options.max_depth:
 			counters.too_deep += 1
 			self.output_mark(OUTPUT_WARN + u'[' + unicode(d) + u']')
 
-	def punctuation_pop(self, q):
-		if not self.stack:
+	def punctuation_close(self, q):
+		try:
+			self.punct.close(q)
+		except IndexError:
+			# Punctuation stack was empty
 			if q == u"’":
 				counters.unmatched_q += 1
 			else:
@@ -429,57 +494,49 @@ class TextChecker(XhtmlTokenizer):
 			
 			if options.do_mismatch:
 				self.output_mark(OUTPUT_WARN)
-			return
-		
-		if q != self.stack[-1].q:
-			if len(self.stack) >= 2 and q == self.stack[-2].q and \
-			   self.stack[-1].maybe_popped == self.stack[-1].count:
-				# Looks like the apostrophes we noted may have been close-quotes
+		except ValueError:
+			# q did not match the top of the punctuation stack
+			if len(self.punct._frames) >= 2 and q == self.punct._frames[-2].q and \
+			   self.punct.top().maybe_closed == self.punct.top().opened:
+				# Looks like the apostrophes we noted might have been close-quotes
 				if options.do_apostrophe:
-					self.output_mark(' ' + OUTPUT_MARK * self.stack[-1].maybe_popped)
-				self.stack.pop()
-				# Fall through to pop p as well
+					self.output_mark(' ' + OUTPUT_MARK * self.punct.top().maybe_closed)
+				# Pop all the apostrophes 
+				self.punct.close_maybes()
+				# Now we can close q without any problem
+				self.punct.close(q)
 			else:
 				if options.do_mismatch:
-					self.output_mark(OUTPUT_WARN + u'[' + self.stack[-1].p + u']')
+					self.output_mark(OUTPUT_WARN + u'[' + self.punct.top().p + u']')
 				# No attempt at recovery here. We may
 				# generate some confusing-looking errors
 				# until we get to the next paragraph,
 				# though they're still possible to understand
 				# if you know what we're doing.
-				if q == u"’" or self.stack[-1].p == u"‘":
+				if q == u"’" or self.punct.top().p == u"‘":
 					counters.unmatched_q += 1
 				else:
 					counters.unmatched += 1
 				return
-		
-		self.stack[-1].count -= 1
-		if self.stack[-1].maybe_popped > self.stack[-1].count:
-			self.stack[-1].maybe_popped = self.stack[-1].count
-		if self.stack[-1].count <= 0:
-			self.stack.pop()
 
-	def punctuation_maybe_pop(self, q):
+	def punctuation_maybe_close(self, q):
 		if options.do_apostrophe:
 			self.output_mark(OUTPUT_MARK)
 		
-		if self.stack and self.stack[-1].q == q:
-			if self.stack[-1].maybe_popped < self.stack[-1].count:
-				self.stack[-1].maybe_popped += 1
+		self.punct.maybe_close(q)
 
 	def punctuation_endpara(self):
-		if self.stack and self.stack[-1].maybe_popped > 0:
+		if self.punct and self.punct.top().maybe_closed > 0:
 			# Looks like some of the apostrophes we noted might have been close-quotes
 			if options.do_apostrophe:
-				self.output_mark(u' ' + OUTPUT_MARK * self.stack[-1].maybe_popped)
-			self.stack[-1].count -= self.stack[-1].maybe_popped
-			if self.stack[-1].count <= 0:
-				self.stack.pop()
+				self.output_mark(u' ' + OUTPUT_MARK * self.punct.top().maybe_closed)
+			# So let's close the same number of open-quotes
+			self.punct.close_maybes()
 
-		if self.stack:
+		if self.punct:
 			if options.do_mismatch:
 				self.output_mark(u' ' + OUTPUT_WARN + u'[')
-				for frame in self.stack:
+				for frame in self.punct._frames:
 					self.output_mark(frame.p)
 					
 					# This may cause some errors to be counted twice
@@ -488,7 +545,7 @@ class TextChecker(XhtmlTokenizer):
 					else:
 						counters.unmatched += 1
 				self.output_mark(u']')
-			self.stack = []
+			self.punct._frames = []
 	
 	__slots__ += ('history', 'hidden_element')
 	def __init__(self, outfile):
@@ -542,9 +599,9 @@ class TextChecker(XhtmlTokenizer):
 		
 		# TODO: make optional, in case of non-standard usage?
 		if cur == u'(':
-			self.punctuation_push(u'()')
+			self.punctuation_open(u'()')
 		elif cur == u')':
-			self.punctuation_pop(u')')
+			self.punctuation_close(u')')
 
 		elif cur == u'“':
 			if prev.isalnum():
@@ -555,7 +612,7 @@ class TextChecker(XhtmlTokenizer):
 				counters.spaced_q += 1
 				if options.do_spacing:
 					self.output_mark(OUTPUT_WARN)
-			self.punctuation_push(u'“”')
+			self.punctuation_open(u'“”')
 		elif cur == u'”':
 			if isbreakspace(prev):
 				counters.spaced_q += 1
@@ -565,7 +622,7 @@ class TextChecker(XhtmlTokenizer):
 				counters.unspaced_q += 1
 				if options.do_spacing:
 					self.output_mark(OUTPUT_WARN)
-			self.punctuation_pop(u'”')
+			self.punctuation_close(u'”')
 
 		# Open quote
 		elif cur == u"‘":
@@ -578,7 +635,7 @@ class TextChecker(XhtmlTokenizer):
 				counters.spaced_q += 1
 				if options.do_spacing:
 					self.output_mark(OUTPUT_WARN)
-			self.punctuation_push(u"‘’")
+			self.punctuation_open(u"‘’")
 
 		elif cur == u"’":
 			if prev.isalnum():
@@ -589,7 +646,7 @@ class TextChecker(XhtmlTokenizer):
 				else:
 					# Ambiguous - could be end-of-word apostrophe OR closing quote
 					counters.ambiguous_apostrophe += 1
-					self.punctuation_maybe_pop(u"’")
+					self.punctuation_maybe_close(u"’")
 			else:
 				if next.isalnum():
 					# Should be a start-of-word apostrophe - 
@@ -606,7 +663,7 @@ class TextChecker(XhtmlTokenizer):
 							self.output_mark(OUTPUT_WARN)
 					# Not attached to word - must be a closing quote
 					counters.closeq += 1
-					self.punctuation_pop(u"’")
+					self.punctuation_close(u"’")
 
 	def character_data(self, c):	
 		if not self.hidden_element:
@@ -644,6 +701,7 @@ class TextChecker(XhtmlTokenizer):
 		self.save_token()
 
 	def end_file(self):
+		self.punctuation_endpara()
 		self.flush_tokens()
 
 
