@@ -478,9 +478,10 @@ class TextChecker(XhtmlTokenizer):
 			counters.samequotes += 1
 	
 		d = sum([s.opened - s.maybe_closed for s in self.punct._frames])
-		if options.do_nesting and d > options.max_depth:
+		if d > options.max_depth:
+			if options.do_nesting:
+				self.output_mark(OUTPUT_WARN + u'[' + unicode(d) + u']')
 			counters.too_deep += 1
-			self.output_mark(OUTPUT_WARN + u'[' + unicode(d) + u']')
 
 	def punctuation_close(self, q):
 		try:
