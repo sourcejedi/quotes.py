@@ -518,7 +518,6 @@ class TextChecker(XhtmlTokenizer):
 					counters.unmatched_q += 1
 				else:
 					counters.unmatched += 1
-				return
 
 	def punctuation_maybe_close(self, q):
 		if options.do_apostrophe:
