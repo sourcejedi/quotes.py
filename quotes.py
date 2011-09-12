@@ -642,7 +642,6 @@ class TextChecker(XhtmlTokenizer):
 			if prev.isalnum():
 				if next.isalpha():
 					# Internal, must be apostrophe
-					# NOTE: This will trigger when apostrophes are used as a thousands separator
 					pass
 				else:
 					# Ambiguous - could be end-of-word apostrophe OR closing quote
