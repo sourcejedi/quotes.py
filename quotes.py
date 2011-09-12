@@ -593,9 +593,9 @@ class TextChecker(XhtmlTokenizer):
 					next = u'”'
 				self.xml_token = next
 
-			# Done rewriting; update history
-			del self.history[0]
-			self.history.append(next)
+		# Done rewriting; update history
+		del self.history[0]
+		self.history.append(next)
 		
 		# TODO: make optional, in case of non-standard usage?
 		if cur == u'(':
