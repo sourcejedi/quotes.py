@@ -678,6 +678,7 @@ class TextChecker(XhtmlTokenizer):
 		self.punctuation_endpara()
 
 	def start_element(self, name, *_):
+		name = name.lower()
 		if name in INVISIBLE_ELEMENTS:
 			self.hidden_element.append(name)
 		if name in PARAGRAPH_ELEMENTS:
@@ -685,6 +686,7 @@ class TextChecker(XhtmlTokenizer):
 		self.save_token()
 
 	def end_element(self, name):
+		name = name.lower()
 		if name in INVISIBLE_ELEMENTS:
 			self.hidden_element.pop()
 		if name in PARAGRAPH_ELEMENTS:
@@ -692,6 +694,7 @@ class TextChecker(XhtmlTokenizer):
 		self.save_token()
 
 	def empty_element(self, name):
+		name = name.lower()
 		if name in PARAGRAPH_ELEMENTS:
 			self.__paragraph_break()
 		self.save_token()
